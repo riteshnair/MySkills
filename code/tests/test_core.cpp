@@ -376,6 +376,130 @@ static void test_native_model_tensor_binding() {
     std::remove(bad_path);
 }
 
+static void test_native_mlp_profile() {
+    auto put_u32 = [](std::vector<unsigned char> *bytes, uint32_t value) {
+        for (unsigned i = 0u; i < 4u; ++i) bytes->push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    auto put_u64 = [](std::vector<unsigned char> *bytes, uint64_t value) {
+        for (unsigned i = 0u; i < 8u; ++i) bytes->push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    struct Spec {
+        const char *name;
+        uint32_t type;
+        uint32_t rank;
+        uint64_t d0;
+        uint64_t d1;
+        uint64_t bytes;
+        uint64_t offset;
+    };
+    std::vector<Spec> specs;
+    uint64_t cursor = 0u;
+    const auto align32 = [](uint64_t value) { return (value + 31u) & ~static_cast<uint64_t>(31u); };
+    const auto add = [&specs, &cursor, &align32](const char *name, uint32_t type, uint32_t rank,
+                                                  uint64_t d0, uint64_t d1, uint64_t bytes) {
+        cursor = align32(cursor);
+        specs.push_back({name, type, rank, d0, d1, bytes, cursor});
+        cursor += bytes;
+    };
+    const uint32_t vocab = 32u;
+    const uint32_t hidden = 32u;
+    const uint32_t intermediate = 64u;
+    add("token_embd.weight", 8u, 2u, hidden, vocab, static_cast<uint64_t>(hidden) * 34u);
+    add("output.weight", 8u, 2u, vocab, hidden, static_cast<uint64_t>(vocab) * 34u);
+    add("output_norm.weight", LM_DTYPE_F32, 1u, hidden, 0u, hidden * sizeof(float));
+    add("blk.0.attn_norm.weight", LM_DTYPE_F32, 1u, hidden, 0u, hidden * sizeof(float));
+    add("blk.0.attn_q.weight", LM_DTYPE_F32, 2u, 1u, 1u, sizeof(float));
+    add("blk.0.attn_k.weight", LM_DTYPE_F32, 2u, 1u, 1u, sizeof(float));
+    add("blk.0.attn_v.weight", LM_DTYPE_F32, 2u, 1u, 1u, sizeof(float));
+    add("blk.0.attn_output.weight", LM_DTYPE_F32, 2u, 1u, 1u, sizeof(float));
+    add("blk.0.ffn_norm.weight", LM_DTYPE_F32, 1u, hidden, 0u, hidden * sizeof(float));
+    add("blk.0.ffn_gate.weight", 8u, 2u, intermediate, hidden, static_cast<uint64_t>(intermediate) * 34u);
+    add("blk.0.ffn_down.weight", 8u, 2u, hidden, intermediate, static_cast<uint64_t>(hidden) * 68u);
+    add("blk.0.ffn_up.weight", 8u, 2u, intermediate, hidden, static_cast<uint64_t>(intermediate) * 34u);
+
+    std::vector<unsigned char> gguf(24u, 0u);
+    gguf[0] = 'G'; gguf[1] = 'G'; gguf[2] = 'U'; gguf[3] = 'F';
+    gguf[4] = 3u;
+    gguf[8] = static_cast<unsigned char>(specs.size());
+    for (const Spec &spec : specs) {
+        const size_t length = std::strlen(spec.name);
+        put_u64(&gguf, length);
+        gguf.insert(gguf.end(), spec.name, spec.name + length);
+        put_u32(&gguf, spec.rank);
+        put_u64(&gguf, spec.d0);
+        if (spec.rank == 2u) put_u64(&gguf, spec.d1);
+        put_u32(&gguf, spec.type);
+        put_u64(&gguf, spec.offset);
+    }
+    const size_t header_size = (gguf.size() + 31u) & ~static_cast<size_t>(31u);
+    gguf.resize(header_size + static_cast<size_t>(cursor), 0u);
+    const auto payload = [&gguf, header_size](uint64_t offset) { return gguf.data() + header_size + offset; };
+    const auto fill_q8 = [&payload](uint64_t offset, uint32_t rows, const auto &row_value) {
+        for (uint32_t row = 0u; row < rows; ++row) {
+            unsigned char *base = payload(offset) + static_cast<size_t>(row) * 34u;
+            base[1] = 0x3cu;
+            for (uint32_t i = 0u; i < 32u; ++i) base[2u + i] = row_value(row);
+        }
+    };
+    fill_q8(specs[0].offset, hidden, [](uint32_t) { return static_cast<unsigned char>(1u); });
+    fill_q8(specs[1].offset, vocab, [](uint32_t row) {
+        return row == 0u ? static_cast<unsigned char>(1u) : (row == 1u ? static_cast<unsigned char>(2u) : static_cast<unsigned char>(0u));
+    });
+    fill_q8(specs[9].offset, intermediate, [](uint32_t) { return static_cast<unsigned char>(1u); });
+    fill_q8(specs[10].offset, hidden, [](uint32_t) { return static_cast<unsigned char>(0u); });
+    fill_q8(specs[11].offset, intermediate, [](uint32_t) { return static_cast<unsigned char>(1u); });
+    for (uint32_t i = 0u; i < hidden; ++i) {
+        float one = 1.0f;
+        std::memcpy(payload(specs[2].offset) + i * sizeof(float), &one, sizeof(one));
+        std::memcpy(payload(specs[3].offset) + i * sizeof(float), &one, sizeof(one));
+        std::memcpy(payload(specs[8].offset) + i * sizeof(float), &one, sizeof(one));
+    }
+    const char *path = "test-native-mlp.gguf";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char *>(gguf.data()), static_cast<std::streamsize>(gguf.size()));
+    }
+    char error[128] = {};
+    lm_model_file *model = nullptr;
+    assert(lm_model_open(path, &model, error, sizeof(error)) == LM_OK);
+    lm_decoder_graph_binding graph{};
+    assert(lm_model_build_llama_graph(model, &graph) == LM_OK);
+    lm_native_mlp_config config{};
+    config.matvec = {LM_BACKEND_CPU, 0u, nullptr};
+    config.layer_index = 0u;
+    config.vocab_size = vocab;
+    config.hidden_size = hidden;
+    config.intermediate_size = intermediate;
+    config.matrix_format = LM_QUANT_GGML_Q8_0;
+    config.rms_epsilon = 1.0e-5f;
+    unsigned char scratch[2176] = {};
+    float logits[vocab] = {};
+    assert(lm_model_execute_native_mlp_logits(model, &graph, &config, 0u, scratch, sizeof(scratch),
+                                              logits, vocab) == LM_OK);
+    const float expected_scale = 1.0f / std::sqrt(1.0f + config.rms_epsilon);
+    assert(std::fabs(logits[0] - 32.0f * expected_scale) < 1.0e-4f);
+    assert(std::fabs(logits[1] - 64.0f * expected_scale) < 1.0e-4f);
+    assert(logits[2] == 0.0f);
+    lm_native_mlp_config bad_shape = config;
+    bad_shape.hidden_size = 16u;
+    assert(lm_model_execute_native_mlp_logits(model, &graph, &bad_shape, 0u, scratch, sizeof(scratch),
+                                              logits, vocab) == LM_ERR_UNSUPPORTED);
+    assert(lm_model_execute_native_mlp_logits(model, &graph, &config, 0u, scratch, 1u,
+                                              logits, vocab) == LM_ERR_CAPACITY);
+    uint32_t devices = 0u;
+    if (lm_vulkan_device_count(&devices) == LM_OK && devices != 0u) {
+        lm_native_mlp_config vulkan_config = config;
+        vulkan_config.matvec = {LM_BACKEND_VULKAN, 0u, "matvec_q8_0_f32.comp.spv"};
+        std::fill(logits, logits + vocab, 0.0f);
+        assert(lm_model_execute_native_mlp_logits(model, &graph, &vulkan_config, 0u, scratch,
+                                                  sizeof(scratch), logits, vocab) == LM_OK);
+        assert(std::fabs(logits[0] - 32.0f * expected_scale) < 1.0e-4f);
+        assert(std::fabs(logits[1] - 64.0f * expected_scale) < 1.0e-4f);
+    }
+    lm_model_close(model);
+    std::remove(path);
+}
+
 static void test_model_and_cpu_math() {
     const char *gguf = "test-fixture.gguf";
     {
@@ -914,6 +1038,7 @@ int main() {
     test_tensor_and_buffer();
     test_file_access();
     test_native_model_tensor_binding();
+    test_native_mlp_profile();
     test_model_and_cpu_math();
     test_safetensors_parser();
     test_sampling();

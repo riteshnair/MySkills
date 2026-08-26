@@ -490,6 +490,26 @@ lm_status lm_decoder_graph_plan_build(const lm_model_tensor_info *descriptors,
 lm_status lm_model_build_llama_graph(const lm_model_file *model,
                                      lm_decoder_graph_binding *out_binding);
 
+/* Narrow profile: one layer's native embedding/MLP/output path only; attention is not scheduled. */
+typedef struct lm_native_mlp_config {
+    lm_native_matvec_config matvec;
+    uint32_t layer_index;
+    uint32_t vocab_size;
+    uint32_t hidden_size;
+    uint32_t intermediate_size;
+    lm_quant_format matrix_format;
+    float rms_epsilon;
+} lm_native_mlp_config;
+
+lm_status lm_model_execute_native_mlp_logits(const lm_model_file *model,
+                                             const lm_decoder_graph_binding *graph,
+                                             const lm_native_mlp_config *config,
+                                             uint32_t token_id,
+                                             void *packed_scratch,
+                                             uint64_t packed_scratch_bytes,
+                                             float *out_logits,
+                                             size_t logits_count);
+
 lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
                            uint32_t experts_per_token, lm_moe_route_policy policy,
                            lm_moe_route *out_route);

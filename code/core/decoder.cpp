@@ -129,6 +129,151 @@ lm_status lm_decoder_graph_plan_build(const lm_model_tensor_info *descriptors,
     return LM_OK;
 }
 
+namespace {
+
+constexpr uint32_t kNativeProfileMaxVocab = 65536u;
+constexpr uint32_t kNativeProfileMaxHidden = 4096u;
+constexpr uint32_t kNativeProfileMaxIntermediate = 16384u;
+
+lm_status profile_matrix(const lm_model_file *model, uint64_t index,
+                        uint32_t rows, uint32_t columns, lm_quant_format format,
+                        uint64_t *payload_bytes) {
+    if (!model || !payload_bytes || rows == 0u || columns == 0u) return LM_ERR_ARGUMENT;
+    lm_model_tensor_binding binding{};
+    const lm_status bound = lm_model_tensor_bind_native(model, index, &binding);
+    if (bound != LM_OK) return bound;
+    if (binding.quant_format != format || binding.descriptor.rank != 2u ||
+        binding.descriptor.dims[0] != rows || binding.descriptor.dims[1] != columns)
+        return LM_ERR_UNSUPPORTED;
+    *payload_bytes = binding.span.bytes;
+    return LM_OK;
+}
+
+lm_status profile_vector(const lm_model_file *model, uint64_t index, uint32_t elements,
+                        std::vector<float> *out) {
+    if (!model || !out || elements == 0u) return LM_ERR_ARGUMENT;
+    lm_model_tensor_info descriptor{};
+    const lm_status described = lm_model_tensor_info_at(model, index, &descriptor);
+    if (described != LM_OK) return described;
+    if (descriptor.rank != 1u || descriptor.dims[0] != elements || descriptor.type != LM_DTYPE_F32)
+        return LM_ERR_UNSUPPORTED;
+    const uint64_t bytes = static_cast<uint64_t>(elements) * sizeof(float);
+    lm_file_span span{};
+    const lm_status spanned = lm_model_tensor_span(model, descriptor.relative_offset, bytes, &span);
+    if (spanned != LM_OK) return spanned;
+    try {
+        out->assign(elements, 0.0f);
+    } catch (const std::bad_alloc &) {
+        return LM_ERR_CAPACITY;
+    }
+    const lm_status read = lm_file_span_read(&span, 0u, out->data(), static_cast<size_t>(bytes));
+    if (read != LM_OK) return read;
+    return finite_array(out->data(), out->size()) ? LM_OK : LM_ERR_RANGE;
+}
+
+lm_status profile_matvec(const lm_model_file *model, uint64_t index,
+                         const lm_native_mlp_config *config, void *packed_scratch,
+                         uint64_t packed_scratch_bytes, uint32_t rows, uint32_t columns,
+                         const float *input, float *out) {
+    return lm_model_tensor_matvec_native(model, index, &config->matvec, packed_scratch,
+                                         packed_scratch_bytes, rows, columns, input, out);
+}
+
+} // namespace
+
+lm_status lm_model_execute_native_mlp_logits(const lm_model_file *model,
+                                             const lm_decoder_graph_binding *graph,
+                                             const lm_native_mlp_config *config,
+                                             uint32_t token_id,
+                                             void *packed_scratch,
+                                             uint64_t packed_scratch_bytes,
+                                             float *out_logits,
+                                             size_t logits_count) {
+    if (!model || !graph || !config || !packed_scratch || !out_logits ||
+        config->layer_index >= graph->layer_count || config->vocab_size == 0u ||
+        config->hidden_size == 0u || config->intermediate_size == 0u ||
+        config->vocab_size > kNativeProfileMaxVocab || config->hidden_size > kNativeProfileMaxHidden ||
+        config->intermediate_size > kNativeProfileMaxIntermediate || token_id >= config->vocab_size ||
+        logits_count < config->vocab_size || !(config->rms_epsilon > 0.0f) ||
+        !std::isfinite(config->rms_epsilon) ||
+        (config->matrix_format != LM_QUANT_GGML_Q8_0 && config->matrix_format != LM_QUANT_GGML_Q4_K))
+        return LM_ERR_ARGUMENT;
+    const lm_decoder_layer_binding &layer = graph->layers[config->layer_index];
+    uint64_t max_payload = 0u;
+    const uint64_t matrix_indices[] = {
+        graph->token_embedding, graph->output, layer.ffn_gate, layer.ffn_up, layer.ffn_down};
+    const uint32_t matrix_rows[] = {
+        config->hidden_size, config->vocab_size, config->intermediate_size,
+        config->intermediate_size, config->hidden_size};
+    const uint32_t matrix_columns[] = {
+        config->vocab_size, config->hidden_size, config->hidden_size,
+        config->hidden_size, config->intermediate_size};
+    for (uint32_t i = 0u; i < 5u; ++i) {
+        uint64_t payload = 0u;
+        const lm_status valid = profile_matrix(model, matrix_indices[i], matrix_rows[i],
+                                               matrix_columns[i], config->matrix_format, &payload);
+        if (valid != LM_OK) return valid;
+        if (payload > max_payload) max_payload = payload;
+    }
+    if (packed_scratch_bytes < max_payload) return LM_ERR_CAPACITY;
+    std::vector<float> embedding, ffn_norm, gate, up, activated, down, output_norm, one_hot, normed, residual;
+    try {
+        one_hot.assign(config->vocab_size, 0.0f);
+        one_hot[token_id] = 1.0f;
+        embedding.assign(config->hidden_size, 0.0f);
+        gate.assign(config->intermediate_size, 0.0f);
+        up.assign(config->intermediate_size, 0.0f);
+        activated.assign(config->intermediate_size, 0.0f);
+        down.assign(config->hidden_size, 0.0f);
+        normed.assign(config->hidden_size, 0.0f);
+        residual.assign(config->hidden_size, 0.0f);
+    } catch (const std::bad_alloc &) {
+        return LM_ERR_CAPACITY;
+    }
+    lm_status status = profile_matvec(model, graph->token_embedding, config, packed_scratch,
+                                      packed_scratch_bytes, config->hidden_size, config->vocab_size,
+                                      one_hot.data(), embedding.data());
+    if (status != LM_OK) return status;
+    status = profile_vector(model, layer.ffn_norm, config->hidden_size, &ffn_norm);
+    if (status != LM_OK) return status;
+    status = profile_vector(model, graph->output_norm, config->hidden_size, &output_norm);
+    if (status != LM_OK) return status;
+    float mean_square = 0.0f;
+    for (uint32_t i = 0u; i < config->hidden_size; ++i) mean_square += embedding[i] * embedding[i];
+    mean_square /= static_cast<float>(config->hidden_size);
+    const float scale = 1.0f / std::sqrt(mean_square + config->rms_epsilon);
+    if (!std::isfinite(scale)) return LM_ERR_RANGE;
+    for (uint32_t i = 0u; i < config->hidden_size; ++i) normed[i] = embedding[i] * scale * ffn_norm[i];
+    if (!finite_array(normed.data(), normed.size())) return LM_ERR_RANGE;
+    status = profile_matvec(model, layer.ffn_gate, config, packed_scratch, packed_scratch_bytes,
+                            config->intermediate_size, config->hidden_size, normed.data(), gate.data());
+    if (status != LM_OK) return status;
+    status = profile_matvec(model, layer.ffn_up, config, packed_scratch, packed_scratch_bytes,
+                            config->intermediate_size, config->hidden_size, normed.data(), up.data());
+    if (status != LM_OK) return status;
+    for (uint32_t i = 0u; i < config->intermediate_size; ++i) {
+        const float sigmoid = 1.0f / (1.0f + std::exp(-gate[i]));
+        activated[i] = gate[i] * sigmoid * up[i];
+    }
+    if (!finite_array(activated.data(), activated.size())) return LM_ERR_RANGE;
+    status = profile_matvec(model, layer.ffn_down, config, packed_scratch, packed_scratch_bytes,
+                            config->hidden_size, config->intermediate_size, activated.data(), down.data());
+    if (status != LM_OK) return status;
+    for (uint32_t i = 0u; i < config->hidden_size; ++i) residual[i] = embedding[i] + down[i];
+    if (!finite_array(residual.data(), residual.size())) return LM_ERR_RANGE;
+    mean_square = 0.0f;
+    for (uint32_t i = 0u; i < config->hidden_size; ++i) mean_square += residual[i] * residual[i];
+    mean_square /= static_cast<float>(config->hidden_size);
+    const float output_scale = 1.0f / std::sqrt(mean_square + config->rms_epsilon);
+    if (!std::isfinite(output_scale)) return LM_ERR_RANGE;
+    for (uint32_t i = 0u; i < config->hidden_size; ++i) normed[i] = residual[i] * output_scale * output_norm[i];
+    if (!finite_array(normed.data(), normed.size())) return LM_ERR_RANGE;
+    status = profile_matvec(model, graph->output, config, packed_scratch, packed_scratch_bytes,
+                            config->vocab_size, config->hidden_size, normed.data(), out_logits);
+    if (status != LM_OK) return status;
+    return finite_array(out_logits, config->vocab_size) ? LM_OK : LM_ERR_RANGE;
+}
+
 lm_status lm_cpu_decoder_create(const lm_cpu_decoder_config *config, lm_cpu_decoder **out_decoder) {
     if (!config || !out_decoder || config->vocab_size == 0u || config->hidden_size == 0u || config->max_context == 0u ||
         config->hidden_size > 4096u || config->max_context > 1u << 20u || !(config->rms_epsilon > 0.0f) ||
