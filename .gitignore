@@ -8,6 +8,7 @@ models/
 *.pool.json
 
 # Build artifacts
+code/build/
 *.o
 *.obj
 *.exe
