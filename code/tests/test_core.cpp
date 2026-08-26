@@ -74,6 +74,26 @@ static void test_tensor_and_buffer() {
     lm_buffer_free(buffer);
 }
 
+static void test_file_access() {
+    const char *path = "test-file.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+        const char bytes[] = "0123456789";
+        file.write(bytes, sizeof(bytes) - 1u);
+    }
+    lm_file *file = nullptr;
+    assert(lm_file_open(path, &file) == LM_OK);
+    uint64_t size = 0u;
+    assert(lm_file_size(file, &size) == LM_OK && size == 10u);
+    char readback[5] = {};
+    assert(lm_file_read(file, 3u, readback, 4u) == LM_OK);
+    assert(std::memcmp(readback, "3456", 4u) == 0);
+    assert(lm_file_read(file, size, nullptr, 0u) == LM_OK);
+    assert(lm_file_read(file, 8u, readback, 4u) == LM_ERR_RANGE);
+    lm_file_close(file);
+    std::remove(path);
+}
+
 static void test_model_and_cpu_math() {
     const char *gguf = "test-fixture.gguf";
     {
@@ -81,9 +101,19 @@ static void test_model_and_cpu_math() {
         const unsigned char header[] = {
             'G','G','U','F', 3,0,0,0,
             1,0,0,0,0,0,0,0,
-            0,0,0,0,0,0,0,0
+            0,0,0,0,0,0,0,0,
+            1,0,0,0,0,0,0,0,
+            'x',
+            1,0,0,0,
+            1,0,0,0,0,0,0,0,
+            0,0,0,0,
+            0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0
         };
         file.write(reinterpret_cast<const char *>(header), sizeof(header));
+        const unsigned char data[4] = {0,0,0,0};
+        file.write(reinterpret_cast<const char *>(data), sizeof(data));
     }
     lm_model_info info;
     char error[128] = {};
@@ -101,6 +131,37 @@ static void test_model_and_cpu_math() {
     assert(lm_cpu_softmax_f32(logits, probabilities, 3u) == LM_OK);
     assert(probabilities[2] > probabilities[1] && probabilities[1] > probabilities[0]);
     assert(probabilities[0] + probabilities[1] + probabilities[2] > 0.999f);
+}
+
+static void test_safetensors_parser() {
+    const char *valid_path = "test-fixture.safetensors";
+    const char *json = "{\"x\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[0,8]}}";
+    {
+        std::ofstream file(valid_path, std::ios::binary);
+        const uint64_t header_bytes = std::strlen(json);
+        file.write(reinterpret_cast<const char *>(&header_bytes), sizeof(header_bytes));
+        file.write(json, static_cast<std::streamsize>(header_bytes));
+        const unsigned char data[8] = {};
+        file.write(reinterpret_cast<const char *>(data), sizeof(data));
+    }
+    lm_model_info info{};
+    char error[128] = {};
+    assert(lm_model_inspect(valid_path, &info, error, sizeof(error)) == LM_OK);
+    assert(info.format == LM_MODEL_SAFETENSORS && info.tensor_count == 1u);
+    std::remove(valid_path);
+
+    const char *bad_path = "bad-fixture.safetensors";
+    const char *bad_json = "{\"a\":{\"dtype\":\"U8\",\"shape\":[4],\"data_offsets\":[0,4]},\"b\":{\"dtype\":\"U8\",\"shape\":[4],\"data_offsets\":[2,6]}}";
+    {
+        std::ofstream file(bad_path, std::ios::binary);
+        const uint64_t header_bytes = std::strlen(bad_json);
+        file.write(reinterpret_cast<const char *>(&header_bytes), sizeof(header_bytes));
+        file.write(bad_json, static_cast<std::streamsize>(header_bytes));
+        const unsigned char data[6] = {};
+        file.write(reinterpret_cast<const char *>(data), sizeof(data));
+    }
+    assert(lm_model_inspect(bad_path, &info, error, sizeof(error)) == LM_ERR_PARSE);
+    std::remove(bad_path);
 }
 
 static void test_kv_pages() {
@@ -170,7 +231,9 @@ int main() {
     test_cli();
     test_invalid_backend();
     test_tensor_and_buffer();
+    test_file_access();
     test_model_and_cpu_math();
+    test_safetensors_parser();
     test_kv_pages();
     test_kernel_selection();
     test_vulkan_dp4();

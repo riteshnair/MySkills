@@ -83,6 +83,12 @@ typedef struct lm_config {
 
 typedef struct lm_runtime lm_runtime;
 typedef struct lm_buffer lm_buffer;
+typedef struct lm_file lm_file;
+
+lm_status lm_file_open(const char *path, lm_file **out_file);
+void lm_file_close(lm_file *file);
+lm_status lm_file_size(const lm_file *file, uint64_t *out_bytes);
+lm_status lm_file_read(lm_file *file, uint64_t offset, void *dst, size_t bytes);
 
 typedef enum lm_dtype {
     LM_DTYPE_F32 = 0,
