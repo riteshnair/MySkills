@@ -2,6 +2,10 @@
 
 > A modular, conditionally loaded skill library for systems programming, GPU compute, graphics, operating systems, compilers, model formats, LLM infrastructure, debugging, and production code quality.
 
+## Authoritative engineering guide
+
+For the complete engine architecture, module contracts, backend and memory policies, GGUF/SafeTensors boundaries, lazy loading, KV-cache design, CLI/API usage, probe-bus tracing, validation gates, and human/AI contribution workflow, start with [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md). This is the integrated source-of-truth guide that goes with the skill sources.
+
 The repository is designed for **progressive disclosure**. Skill metadata is used for routing; a skill body is loaded only when its trigger matches the active task; detailed procedures and version matrices live in on-demand references. This keeps unrelated domain knowledge out of context and reduces token consumption.
 
 ## Design principles
