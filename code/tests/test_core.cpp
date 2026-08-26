@@ -1,9 +1,11 @@
 #include "lm/lm.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 
 struct ProbeState { unsigned count; uint32_t last_stage; };
 
@@ -244,6 +246,22 @@ static void test_cpu_decoder() {
     lm_cpu_decoder_destroy(decoder);
 }
 
+static void test_moe_router() {
+    const float logits[] = {1.0f, 3.0f, 3.0f, -2.0f};
+    lm_moe_route route{};
+    assert(lm_cpu_moe_route(logits, 4u, 2u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_OK);
+    assert(route.selected[0] == 1u && route.selected[1] == 2u);
+    assert(route.weights[0] == 0.5f && route.weights[1] == 0.5f);
+    assert(std::fabs((route.weights[0] + route.weights[1]) - 1.0f) < 1.0e-6f);
+    lm_moe_route selected_only{};
+    assert(lm_cpu_moe_route(logits, 4u, 2u, LM_MOE_SOFTMAX_SELECTED_ONLY, &selected_only) == LM_OK);
+    assert(selected_only.weights[0] == 0.5f && selected_only.weights[1] == 0.5f);
+    const float bad_logits[] = {0.0f, std::numeric_limits<float>::quiet_NaN()};
+    assert(lm_cpu_moe_route(bad_logits, 2u, 1u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_ERR_RANGE);
+    assert(lm_cpu_moe_route(logits, 4u, 3u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_OK);
+    assert(lm_cpu_moe_route(logits, 4u, 0u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_ERR_ARGUMENT);
+}
+
 static void test_kv_pages() {
     lm_kv_cache *cache = nullptr;
     assert(lm_kv_cache_create(2u, 4u, &cache) == LM_OK);
@@ -325,6 +343,7 @@ int main() {
     test_model_and_cpu_math();
     test_safetensors_parser();
     test_cpu_decoder();
+    test_moe_router();
     test_kv_pages();
     test_kernel_selection();
     test_vulkan_dp4();

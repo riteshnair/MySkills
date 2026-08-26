@@ -282,6 +282,22 @@ lm_status lm_cpu_decoder_reset(lm_cpu_decoder *decoder);
 lm_status lm_cpu_decoder_step(lm_cpu_decoder *decoder, uint32_t token_id, float *out_logits, size_t logits_count);
 uint32_t lm_cpu_decoder_position(const lm_cpu_decoder *decoder);
 
+typedef enum lm_moe_route_policy {
+    LM_MOE_SOFTMAX_ALL_THEN_TOPK = 0,
+    LM_MOE_SOFTMAX_SELECTED_ONLY
+} lm_moe_route_policy;
+
+typedef struct lm_moe_route {
+    uint32_t expert_count;
+    uint32_t experts_per_token;
+    uint32_t selected[16];
+    float weights[16];
+} lm_moe_route;
+
+lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
+                           uint32_t experts_per_token, lm_moe_route_policy policy,
+                           lm_moe_route *out_route);
+
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);
 void lm_kv_cache_destroy(lm_kv_cache *cache);
