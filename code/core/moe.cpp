@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <vector>
 
 namespace {
 
@@ -119,6 +120,67 @@ lm_status lm_cpu_moe_combine(const lm_moe_route *route, const float *selected_ou
         }
     }
     for (uint32_t i = 0u; i < hidden_size; ++i) if (!std::isfinite(out_hidden[i])) return LM_ERR_RANGE;
+    return LM_OK;
+}
+
+lm_status lm_cpu_moe_selected_expert_mlp_q4_k(const lm_moe_route *route,
+                                              const lm_tensor *gate_up_weights,
+                                              const lm_tensor *down_weights,
+                                              uint32_t hidden_size, uint32_t intermediate_size,
+                                              const float *input, float *selected_outputs) {
+    if (!route || !gate_up_weights || !down_weights || !input || !selected_outputs ||
+        route->expert_count == 0u || route->experts_per_token == 0u || route->experts_per_token > 16u ||
+        hidden_size == 0u || intermediate_size == 0u || hidden_size % 256u != 0u || intermediate_size % 256u != 0u)
+        return LM_ERR_ARGUMENT;
+    if (gate_up_weights->quant_format != LM_QUANT_GGML_Q4_K || down_weights->quant_format != LM_QUANT_GGML_Q4_K ||
+        gate_up_weights->dtype != LM_DTYPE_U8 || down_weights->dtype != LM_DTYPE_U8)
+        return LM_ERR_UNSUPPORTED;
+    if (gate_up_weights->rank != 3u || down_weights->rank != 3u ||
+        gate_up_weights->dims[0] != hidden_size || gate_up_weights->dims[1] != intermediate_size * 2u ||
+        gate_up_weights->dims[2] != route->expert_count || down_weights->dims[0] != intermediate_size ||
+        down_weights->dims[1] != hidden_size || down_weights->dims[2] != route->expert_count)
+        return LM_ERR_RANGE;
+    const uint64_t gate_up_row_bytes = (static_cast<uint64_t>(hidden_size) / 256u) * 144u;
+    const uint64_t gate_up_expert_bytes = gate_up_row_bytes * static_cast<uint64_t>(intermediate_size) * 2u;
+    const uint64_t down_row_bytes = (static_cast<uint64_t>(intermediate_size) / 256u) * 144u;
+    const uint64_t down_expert_bytes = down_row_bytes * static_cast<uint64_t>(hidden_size);
+    if (gate_up_expert_bytes > std::numeric_limits<uint64_t>::max() / route->expert_count ||
+        down_expert_bytes > std::numeric_limits<uint64_t>::max() / route->expert_count ||
+        gate_up_weights->bytes != gate_up_expert_bytes * route->expert_count ||
+        down_weights->bytes != down_expert_bytes * route->expert_count)
+        return LM_ERR_CAPACITY;
+    std::vector<float> gate_up_output(static_cast<size_t>(intermediate_size) * 2u);
+    const unsigned char *gate_up = static_cast<const unsigned char *>(gate_up_weights->data);
+    const unsigned char *down = static_cast<const unsigned char *>(down_weights->data);
+    for (uint32_t slot = 0u; slot < route->experts_per_token; ++slot) {
+        if (route->selected[slot] >= route->expert_count || !std::isfinite(route->weights[slot])) return LM_ERR_RANGE;
+        const uint32_t expert = route->selected[slot];
+        const unsigned char *gate_up_expert = gate_up + static_cast<size_t>(expert * gate_up_expert_bytes);
+        const unsigned char *down_expert = down + static_cast<size_t>(expert * down_expert_bytes);
+        lm_tensor gate_up_view{};
+        const uint32_t gate_up_dims[2] = {intermediate_size * 2u, hidden_size};
+        lm_status status = lm_tensor_make_q4_k_view(const_cast<unsigned char *>(gate_up_expert), gate_up_expert_bytes,
+                                                    2u, gate_up_dims, &gate_up_view);
+        if (status != LM_OK) return status;
+        status = lm_cpu_matvec_q4_k(&gate_up_view, input, intermediate_size * 2u, hidden_size, gate_up_output.data());
+        if (status != LM_OK) return status;
+        std::vector<float> activation(intermediate_size);
+        for (uint32_t j = 0u; j < intermediate_size; ++j) {
+            const float gate = gate_up_output[j];
+            const float up = gate_up_output[intermediate_size + j];
+            if (!std::isfinite(gate) || !std::isfinite(up)) return LM_ERR_RANGE;
+            activation[j] = (gate / (1.0f + std::exp(-gate))) * up;
+            if (!std::isfinite(activation[j])) return LM_ERR_RANGE;
+        }
+        lm_tensor down_view{};
+        const uint32_t down_dims[2] = {hidden_size, intermediate_size};
+        status = lm_tensor_make_q4_k_view(const_cast<unsigned char *>(down_expert), down_expert_bytes,
+                                          2u, down_dims, &down_view);
+        if (status != LM_OK) return status;
+        status = lm_cpu_matvec_q4_k(&down_view, activation.data(), hidden_size, intermediate_size,
+                                    selected_outputs + static_cast<size_t>(slot) * hidden_size);
+        if (status != LM_OK) return status;
+    }
     return LM_OK;
 }
 

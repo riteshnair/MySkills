@@ -232,8 +232,10 @@ lm_status lm_vulkan_dot_f32(const char *spv_path, uint32_t device_index,
 lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
                              const void *packed_q4_k, uint32_t blocks,
                              const float *input, float *out_result);
-
-
+lm_status lm_vulkan_matvec_q4_k(const char *spv_path, uint32_t device_index,
+                                const void *packed_q4_k, uint32_t rows,
+                                uint32_t blocks_per_row, const float *input,
+                                float *out);
 typedef struct lm_kv_cache lm_kv_cache;
 
 typedef struct lm_kv_stats {
@@ -308,6 +310,9 @@ lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
 lm_status lm_cpu_dot_q4_k(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
+lm_status lm_cpu_matvec_q4_k(const lm_tensor *weights, const float *input,
+                             uint32_t rows, uint32_t columns, float *out);
+
 
 typedef struct lm_cpu_decoder lm_cpu_decoder;
 
@@ -376,6 +381,11 @@ lm_status lm_cpu_moe_selected_expert_mlp(const lm_moe_route *route,
                                          const lm_tensor *down_weights,
                                          uint32_t hidden_size, uint32_t intermediate_size,
                                          const float *input, float *selected_outputs);
+lm_status lm_cpu_moe_selected_expert_mlp_q4_k(const lm_moe_route *route,
+                                              const lm_tensor *gate_up_weights,
+                                              const lm_tensor *down_weights,
+                                              uint32_t hidden_size, uint32_t intermediate_size,
+                                              const float *input, float *selected_outputs);
 
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);

@@ -493,6 +493,38 @@ static void test_moe_router() {
     assert(lm_cpu_moe_combine(&mlp_route, selected_mlp_output, 2u, combined_mlp) == LM_OK);
     assert(std::fabs(combined_mlp[0] - expected_mlp) < 1.0e-5f &&
            std::fabs(combined_mlp[1] - expected_mlp) < 1.0e-5f);
+    lm_moe_route native_route{};
+    native_route.expert_count = 2u;
+    native_route.experts_per_token = 1u;
+    native_route.selected[0] = 1u;
+    native_route.weights[0] = 1.0f;
+    const uint32_t native_gate_up_dims[3] = {256u, 512u, 2u};
+    const uint32_t native_down_dims[3] = {256u, 256u, 2u};
+    std::vector<unsigned char> native_gate_up(2u * 512u * 144u, 0u);
+    std::vector<unsigned char> native_down(2u * 256u * 144u, 0u);
+    const auto fill_q4_k = [](std::vector<unsigned char> *bytes, uint32_t blocks) {
+        for (uint32_t block = 0u; block < blocks; ++block) {
+            const size_t base = static_cast<size_t>(block) * 144u;
+            bytes->at(base + 1u) = 0x3cu;
+            for (unsigned i = 0u; i < 4u; ++i) bytes->at(base + 4u + i) = 1u;
+            for (unsigned i = 0u; i < 4u; ++i) bytes->at(base + 12u + i) = 1u;
+            for (unsigned i = 0u; i < 128u; ++i) bytes->at(base + 16u + i) = 0x11u;
+        }
+    };
+    fill_q4_k(&native_gate_up, 2u * 512u);
+    fill_q4_k(&native_down, 2u * 256u);
+    lm_tensor native_gate_up_tensor{};
+    lm_tensor native_down_tensor{};
+    assert(lm_tensor_make_q4_k_view(native_gate_up.data(), native_gate_up.size(), 3u,
+                                     native_gate_up_dims, &native_gate_up_tensor) == LM_OK);
+    assert(lm_tensor_make_q4_k_view(native_down.data(), native_down.size(), 3u,
+                                     native_down_dims, &native_down_tensor) == LM_OK);
+    std::vector<float> native_input(256u, 1.0f);
+    float native_output[256] = {};
+    assert(lm_cpu_moe_selected_expert_mlp_q4_k(&native_route, &native_gate_up_tensor,
+                                                &native_down_tensor, 256u, 256u,
+                                                native_input.data(), native_output) == LM_OK);
+    for (float value : native_output) assert(value == 16777216.0f);
 }
 
 
@@ -562,6 +594,23 @@ static void test_vulkan_dp4() {
     assert(lm_vulkan_dot_q4_k("dot_q4_k_f32.comp.spv", 0u, q4_k_bytes, 1u,
                               q4_k_input, &q4_k_gpu_result) == LM_OK);
     assert(q4_k_gpu_result == 256.0f);
+    unsigned char q4_k_rows[288] = {};
+    std::memcpy(q4_k_rows, q4_k_bytes, sizeof(q4_k_bytes));
+    q4_k_rows[144u] = 0x00u;
+    q4_k_rows[145u] = 0x3cu;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_rows[148u + i] = 1u;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_rows[156u + i] = 1u;
+    for (unsigned i = 0u; i < 128u; ++i) q4_k_rows[160u + i] = 0x22u;
+    const uint32_t matvec_dims[2] = {2u, 256u};
+    lm_tensor matvec_tensor{};
+    assert(lm_tensor_make_q4_k_view(q4_k_rows, sizeof(q4_k_rows), 2u, matvec_dims, &matvec_tensor) == LM_OK);
+    float cpu_matvec[2] = {};
+    assert(lm_cpu_matvec_q4_k(&matvec_tensor, q4_k_input, 2u, 256u, cpu_matvec) == LM_OK);
+    assert(cpu_matvec[0] == 256.0f && cpu_matvec[1] == 512.0f);
+    float gpu_matvec[2] = {};
+    assert(lm_vulkan_matvec_q4_k("dot_q4_k_f32.comp.spv", 0u, q4_k_rows, 2u, 1u,
+                                 q4_k_input, gpu_matvec) == LM_OK);
+    assert(gpu_matvec[0] == cpu_matvec[0] && gpu_matvec[1] == cpu_matvec[1]);
     const float scalar_a[] = {1.0f, 2.0f, 3.0f, 4.0f};
     const float scalar_b[] = {5.0f, 6.0f, 7.0f, 8.0f};
     float scalar_result = 0.0f;

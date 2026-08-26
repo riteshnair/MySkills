@@ -248,3 +248,22 @@ lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
     cleanup();
     return std::isfinite(*out_result) ? LM_OK : LM_ERR_RANGE;
 }
+
+lm_status lm_vulkan_matvec_q4_k(const char *spv_path, uint32_t device_index,
+                                const void *packed_q4_k, uint32_t rows,
+                                uint32_t blocks_per_row, const float *input,
+                                float *out) {
+    if (!spv_path || !packed_q4_k || !input || !out || rows == 0u || blocks_per_row == 0u) return LM_ERR_ARGUMENT;
+    const uint64_t row_bytes = static_cast<uint64_t>(blocks_per_row) * 144u;
+    if (row_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        static_cast<uint64_t>(rows) > std::numeric_limits<uint64_t>::max() / row_bytes)
+        return LM_ERR_CAPACITY;
+    const unsigned char *packed = static_cast<const unsigned char *>(packed_q4_k);
+    for (uint32_t row = 0u; row < rows; ++row) {
+        const lm_status status = lm_vulkan_dot_q4_k(spv_path, device_index,
+                                                     packed + static_cast<size_t>(row) * static_cast<size_t>(row_bytes),
+                                                     blocks_per_row, input, &out[row]);
+        if (status != LM_OK) return status;
+    }
+    return LM_OK;
+}

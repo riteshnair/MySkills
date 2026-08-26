@@ -801,6 +801,30 @@ lm_status lm_cpu_dot_q4_k(const lm_tensor *weights, const float *input,
     return LM_OK;
 }
 
+lm_status lm_cpu_matvec_q4_k(const lm_tensor *weights, const float *input,
+                             uint32_t rows, uint32_t columns, float *out) {
+    if (!weights || !input || !out || rows == 0u || columns == 0u || columns % 256u != 0u ||
+        weights->quant_format != LM_QUANT_GGML_Q4_K || weights->dtype != LM_DTYPE_U8 ||
+        weights->rank != 2u || weights->dims[0] != rows || weights->dims[1] != columns)
+        return LM_ERR_ARGUMENT;
+    if (lm_tensor_validate(weights) != LM_OK) return LM_ERR_RANGE;
+    const uint64_t row_bytes = (static_cast<uint64_t>(columns) / 256u) * 144u;
+    if (row_bytes > std::numeric_limits<size_t>::max() ||
+        static_cast<uint64_t>(rows) > std::numeric_limits<uint64_t>::max() / row_bytes ||
+        weights->bytes != static_cast<uint64_t>(rows) * row_bytes)
+        return LM_ERR_CAPACITY;
+    for (uint32_t row = 0u; row < rows; ++row) {
+        lm_tensor row_tensor{};
+        const uint32_t row_dims[1] = {columns};
+        unsigned char *row_data = static_cast<unsigned char *>(weights->data) + static_cast<size_t>(row) * static_cast<size_t>(row_bytes);
+        const lm_status view_status = lm_tensor_make_q4_k_view(row_data, row_bytes, 1u, row_dims, &row_tensor);
+        if (view_status != LM_OK) return view_status;
+        const lm_status dot_status = lm_cpu_dot_q4_k(&row_tensor, input, columns, &out[row]);
+        if (dot_status != LM_OK) return dot_status;
+    }
+    return LM_OK;
+}
+
 lm_status lm_cpu_softmax_f32(const float *input, float *output, size_t count) {
     if (!input || !output || count == 0u) return LM_ERR_ARGUMENT;
     float max_value = -std::numeric_limits<float>::infinity();
