@@ -25,3 +25,9 @@ The current GGUF specification includes architecture metadata for expert models,
 The Mixtral configuration reference identifies `num_local_experts` as the number of expert MLPs available on a device and `num_experts_per_tok` as the token-choice top-k routing value. A correct runtime must preserve all expert weights in their native encoded layout, compute router logits, select the configured top-k experts, normalize or apply the model-specified routing weights, evaluate only selected experts, and combine their outputs. Loading all experts into F32 would be an invalid default for the memory design.
 
 Sources: [GGUF specification](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md), [Mixtral configuration and architecture reference](https://huggingface.co/docs/transformers/en/model_doc/mixtral), and [llama.cpp tensor-name mapping](https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/tensor_mapping.py).
+
+## Native GGML block layouts
+
+The official `ggml-common.h` defines the classic blocks used by GGUF. `Q4_0` has 32 values and 18 bytes per block (`fp16 d` plus 16 packed nibbles). `Q8_0` has 32 values and 34 bytes per block (`fp16 d` plus 32 signed bytes). K-quants use a 256-value super-block: `Q2_K` is 84 bytes, `Q3_K` is 110 bytes, `Q4_K` is 144 bytes, `Q5_K` is 176 bytes, and `Q6_K` is 210 bytes, based on the exact field declarations and static-size assertions in the authoritative header. Their dequantization is not interchangeable with the classic Q4_0/Q8_0 formulas, so each needs a separate decoder and differential fixture.
+
+Source: [llama.cpp ggml-common.h](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-common.h).
