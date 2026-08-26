@@ -556,6 +556,53 @@ lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *ou
     return LM_OK;
 }
 
+float half_to_float(uint16_t bits) {
+    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16u;
+    const uint32_t exponent = (bits >> 10u) & 0x1fu;
+    const uint32_t fraction = bits & 0x03ffu;
+    uint32_t value = 0u;
+    if (exponent == 0u) {
+        if (fraction == 0u) value = sign;
+        else {
+            uint32_t normalized = fraction;
+            uint32_t shift = 0u;
+            while ((normalized & 0x0400u) == 0u) { normalized <<= 1u; ++shift; }
+            value = sign | ((127u - 15u - shift) << 23u) | ((normalized & 0x03ffu) << 13u);
+        }
+    } else if (exponent == 0x1fu) value = sign | 0x7f800000u | (fraction << 13u);
+    else value = sign | ((exponent + 112u) << 23u) | (fraction << 13u);
+    float result = 0.0f;
+    std::memcpy(&result, &value, sizeof(result));
+    return result;
+}
+
+lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
+                          uint64_t elements, float *out) {
+    if (!weights || !input || !out || elements == 0u || elements % 32u != 0u ||
+        weights->quant_format != LM_QUANT_GGML_Q8_0 || weights->dtype != LM_DTYPE_U8)
+        return LM_ERR_ARGUMENT;
+    if (lm_tensor_validate(weights) != LM_OK) return LM_ERR_RANGE;
+    const uint64_t required_bytes = (elements / 32u) * 34u;
+    if (required_bytes != weights->bytes) return LM_ERR_CAPACITY;
+    const unsigned char *packed = static_cast<const unsigned char *>(weights->data);
+    float sum = 0.0f;
+    for (uint64_t block = 0u; block < elements / 32u; ++block) {
+        const size_t base = static_cast<size_t>(block * 34u);
+        const uint16_t scale_bits = static_cast<uint16_t>(packed[base]) | static_cast<uint16_t>(packed[base + 1u] << 8u);
+        const float scale = half_to_float(scale_bits);
+        if (!std::isfinite(scale)) return LM_ERR_RANGE;
+        for (uint32_t i = 0u; i < 32u; ++i) {
+            const float value = input[block * 32u + i];
+            if (!std::isfinite(value)) return LM_ERR_RANGE;
+            const int8_t quantized = static_cast<int8_t>(packed[base + 2u + i]);
+            sum += scale * static_cast<float>(quantized) * value;
+        }
+    }
+    if (!std::isfinite(sum)) return LM_ERR_RANGE;
+    *out = sum;
+    return LM_OK;
+}
+
 lm_status lm_cpu_softmax_f32(const float *input, float *output, size_t count) {
     if (!input || !output || count == 0u) return LM_ERR_ARGUMENT;
     float max_value = -std::numeric_limits<float>::infinity();

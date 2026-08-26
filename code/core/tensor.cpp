@@ -13,6 +13,7 @@ const char *lm_quant_format_name(lm_quant_format format) {
     switch (format) {
         case LM_QUANT_NONE: return "none";
         case LM_QUANT_BLOCK_STORAGE: return "block-storage";
+        case LM_QUANT_GGML_Q8_0: return "ggml-q8_0";
         default: return "unknown";
     }
 }
@@ -45,8 +46,12 @@ lm_status lm_tensor_validate(const lm_tensor *tensor) {
         if (tensor->bytes < elements * element_size) return LM_ERR_CAPACITY;
         return LM_OK;
     }
-    if (tensor->quant_format != LM_QUANT_BLOCK_STORAGE || tensor->quant_elements_per_block == 0u ||
-        tensor->quant_bytes_per_block == 0u || elements % tensor->quant_elements_per_block != 0u)
+    if ((tensor->quant_format != LM_QUANT_BLOCK_STORAGE && tensor->quant_format != LM_QUANT_GGML_Q8_0) ||
+        tensor->quant_elements_per_block == 0u || tensor->quant_bytes_per_block == 0u ||
+        elements % tensor->quant_elements_per_block != 0u)
+        return LM_ERR_ARGUMENT;
+    if (tensor->quant_format == LM_QUANT_GGML_Q8_0 &&
+        (tensor->quant_elements_per_block != 32u || tensor->quant_bytes_per_block != 34u))
         return LM_ERR_ARGUMENT;
     const uint64_t blocks = elements / tensor->quant_elements_per_block;
     if (blocks > std::numeric_limits<uint64_t>::max() / tensor->quant_bytes_per_block) return LM_ERR_RANGE;
@@ -75,6 +80,15 @@ lm_status lm_tensor_make_quant_view(void *data, uint64_t bytes,
     out_tensor->quant_format = LM_QUANT_BLOCK_STORAGE;
     out_tensor->quant_elements_per_block = elements_per_block;
     out_tensor->quant_bytes_per_block = bytes_per_block;
+    return lm_tensor_validate(out_tensor);
+}
+
+lm_status lm_tensor_make_q8_0_view(void *data, uint64_t bytes,
+                                   uint32_t rank, const uint32_t *dims,
+                                   lm_tensor *out_tensor) {
+    const lm_status status = lm_tensor_make_quant_view(data, bytes, rank, dims, 32u, 34u, out_tensor);
+    if (status != LM_OK) return status;
+    out_tensor->quant_format = LM_QUANT_GGML_Q8_0;
     return lm_tensor_validate(out_tensor);
 }
 

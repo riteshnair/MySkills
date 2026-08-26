@@ -98,6 +98,20 @@ static void test_tensor_and_buffer() {
     assert(lm_tensor_make_quant_view(quantized_bytes, sizeof(quantized_bytes), 1u, quant_dims, 32u, 20u, &quantized) == LM_OK);
     assert(quantized.quant_format == LM_QUANT_BLOCK_STORAGE && quantized.dtype == LM_DTYPE_U8);
     assert(lm_tensor_make_quant_view(quantized_bytes, 19u, 1u, quant_dims, 32u, 20u, &quantized) == LM_ERR_CAPACITY);
+    unsigned char q8_bytes[34] = {};
+    q8_bytes[0] = 0x00u;
+    q8_bytes[1] = 0x3cu;
+    for (unsigned i = 0u; i < 32u; ++i) q8_bytes[2u + i] = static_cast<unsigned char>(i + 1u);
+    lm_tensor q8_weights{};
+    assert(lm_tensor_make_q8_0_view(q8_bytes, sizeof(q8_bytes), 1u, quant_dims, &q8_weights) == LM_OK);
+    const float q8_input[32] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                                1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                                1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                                1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float q8_result = 0.0f;
+    assert(lm_cpu_dot_q8_0(&q8_weights, q8_input, 32u, &q8_result) == LM_OK);
+    assert(q8_result == 528.0f);
+    assert(lm_tensor_make_q8_0_view(q8_bytes, 33u, 1u, quant_dims, &q8_weights) == LM_ERR_CAPACITY);
     lm_buffer_free(buffer);
 }
 
