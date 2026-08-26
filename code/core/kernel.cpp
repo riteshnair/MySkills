@@ -4,6 +4,28 @@ static int valid_op(lm_kernel_op op) {
     return op >= LM_KERNEL_DOT_F32 && op <= LM_KERNEL_SOFTMAX_F32;
 }
 
+lm_status lm_kernel_contract_get(const lm_kernel_choice *choice, lm_kernel_contract *out_contract) {
+    if (!choice || !out_contract) return LM_ERR_ARGUMENT;
+    out_contract->input_dtype = LM_DTYPE_F32;
+    out_contract->output_dtype = LM_DTYPE_F32;
+    out_contract->minimum_alignment = 1u;
+    out_contract->deterministic = 1u;
+    out_contract->source_id = choice->source_id;
+    if (choice->op == LM_KERNEL_DOT_I8) {
+        out_contract->input_dtype = LM_DTYPE_I8;
+        if (choice->path == LM_KERNEL_VULKAN_DP4) {
+            out_contract->output_dtype = LM_DTYPE_I32;
+            out_contract->minimum_alignment = 4u;
+        } else {
+            out_contract->output_dtype = LM_DTYPE_I32;
+        }
+    } else if (choice->op != LM_KERNEL_DOT_F32 && choice->op != LM_KERNEL_SOFTMAX_F32) {
+        return LM_ERR_UNSUPPORTED;
+    }
+    if (choice->path == LM_KERNEL_AUTO || !choice->source_id || choice->source_id[0] == '\0') return LM_ERR_STATE;
+    return LM_OK;
+}
+
 const char *lm_kernel_path_name(lm_kernel_path path) {
     switch (path) {
         case LM_KERNEL_AUTO: return "auto";

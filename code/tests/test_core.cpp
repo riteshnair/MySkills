@@ -232,6 +232,10 @@ static void test_kernel_selection() {
     assert(lm_kernel_select(LM_KERNEL_DOT_I8, LM_KERNEL_AUTO, &dp4, &choice) == LM_OK);
     assert(choice.path == LM_KERNEL_VULKAN_DP4);
     assert(std::strcmp(choice.source_id, "vulkan/dp4") == 0);
+    lm_kernel_contract contract{};
+    assert(lm_kernel_contract_get(&choice, &contract) == LM_OK);
+    assert(contract.input_dtype == LM_DTYPE_I8 && contract.output_dtype == LM_DTYPE_I32);
+    assert(contract.minimum_alignment == 4u && contract.deterministic == 1u);
     assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_DP4, &dp4, &choice) == LM_ERR_UNSUPPORTED);
     assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_SCALAR, &dp4, &choice) == LM_OK);
     assert(choice.path == LM_KERNEL_VULKAN_SCALAR);

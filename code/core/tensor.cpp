@@ -15,6 +15,7 @@ size_t lm_dtype_size(lm_dtype dtype) {
         case LM_DTYPE_F16: return 2u;
         case LM_DTYPE_BF16: return 2u;
         case LM_DTYPE_I8: return 1u;
+        case LM_DTYPE_I32: return 4u;
         case LM_DTYPE_U8: return 1u;
         default: return 0u;
     }

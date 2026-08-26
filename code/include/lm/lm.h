@@ -95,6 +95,7 @@ typedef enum lm_dtype {
     LM_DTYPE_F16,
     LM_DTYPE_BF16,
     LM_DTYPE_I8,
+    LM_DTYPE_I32,
     LM_DTYPE_U8
 } lm_dtype;
 
@@ -143,6 +144,15 @@ typedef struct lm_kernel_choice {
     const char *source_id;
 } lm_kernel_choice;
 
+typedef struct lm_kernel_contract {
+    lm_dtype input_dtype;
+    lm_dtype output_dtype;
+    uint32_t minimum_alignment;
+    uint8_t deterministic;
+    const char *source_id;
+} lm_kernel_contract;
+
+lm_status lm_kernel_contract_get(const lm_kernel_choice *choice, lm_kernel_contract *out_contract);
 lm_status lm_kernel_select(lm_kernel_op op, lm_kernel_path requested,
                            const lm_kernel_caps *caps, lm_kernel_choice *out_choice);
 const char *lm_kernel_path_name(lm_kernel_path path);
