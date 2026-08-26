@@ -496,6 +496,27 @@ static void test_safetensors_parser() {
     std::remove(bad_path);
 }
 
+static void test_sampling() {
+    const float logits[] = {1.0f, 3.0f, 3.0f, -2.0f};
+    lm_sampling_config greedy{LM_SAMPLING_GREEDY, 0u, 1.0f, 1u};
+    uint32_t token = 99u;
+    float probability = 0.0f;
+    assert(lm_sample_logits(logits, 4u, &greedy, &token, &probability) == LM_OK);
+    assert(token == 1u && probability == 1.0f);
+    lm_sampling_config top_k{LM_SAMPLING_TOP_K, 2u, 1.0f, 123u};
+    uint32_t first_token = 99u;
+    float first_probability = 0.0f;
+    assert(lm_sample_logits(logits, 4u, &top_k, &first_token, &first_probability) == LM_OK);
+    assert((first_token == 1u || first_token == 2u) && first_probability > 0.0f && first_probability < 1.0f);
+    uint32_t second_token = 99u;
+    float second_probability = 0.0f;
+    assert(lm_sample_logits(logits, 4u, &top_k, &second_token, &second_probability) == LM_OK);
+    assert(first_token == second_token && first_probability == second_probability);
+    lm_sampling_config invalid{LM_SAMPLING_TOP_K, 5u, 1.0f, 1u};
+    assert(lm_sample_logits(logits, 4u, &invalid, &token, &probability) == LM_ERR_ARGUMENT);
+    assert(lm_sample_logits(nullptr, 4u, &greedy, &token, &probability) == LM_ERR_ARGUMENT);
+}
+
 static void test_cpu_decoder() {
     lm_model_tensor_info mapped_descriptor{};
     std::strcpy(mapped_descriptor.name, "blk.7.attn_q.weight");
@@ -839,6 +860,7 @@ int main() {
     test_native_model_tensor_binding();
     test_model_and_cpu_math();
     test_safetensors_parser();
+    test_sampling();
     test_cpu_decoder();
     test_moe_router();
     test_kv_pages();

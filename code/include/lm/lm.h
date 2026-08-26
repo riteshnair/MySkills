@@ -348,6 +348,22 @@ lm_status lm_model_inspect(const char *path, lm_model_info *out_info,
                            char *error_text, size_t error_capacity);
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out);
 lm_status lm_cpu_softmax_f32(const float *input, float *output, size_t count);
+
+typedef enum lm_sampling_mode {
+    LM_SAMPLING_GREEDY = 0,
+    LM_SAMPLING_TOP_K
+} lm_sampling_mode;
+
+typedef struct lm_sampling_config {
+    lm_sampling_mode mode;
+    uint32_t top_k;
+    float temperature;
+    uint64_t seed;
+} lm_sampling_config;
+
+lm_status lm_sample_logits(const float *logits, uint32_t vocab_size,
+                           const lm_sampling_config *config, uint32_t *out_token,
+                           float *out_probability);
 lm_status lm_cpu_dot_q4_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
 lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
