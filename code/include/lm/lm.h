@@ -289,6 +289,15 @@ lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_off
 lm_status lm_model_tensor_bind_native(const lm_model_file *model, uint64_t index, lm_model_tensor_binding *out_binding);
 lm_status lm_model_tensor_binding_view(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor);
 lm_status lm_model_tensor_binding_read(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor);
+lm_status lm_model_tensor_binding_matvec_q4_k_cpu(const lm_model_tensor_binding *binding,
+                                                  void *packed_scratch, uint64_t scratch_bytes,
+                                                  uint32_t rows, uint32_t columns,
+                                                  const float *input, float *out);
+lm_status lm_model_tensor_binding_matvec_q4_k_vulkan(const lm_model_tensor_binding *binding,
+                                                     void *packed_scratch, uint64_t scratch_bytes,
+                                                     uint32_t rows, uint32_t columns,
+                                                     const char *spv_path, uint32_t device_index,
+                                                     const float *input, float *out);
 
 
 void lm_config_init(lm_config *config);
@@ -367,9 +376,44 @@ typedef struct lm_moe_tensor_mapping {
     uint64_t dims[8];
 } lm_moe_tensor_mapping;
 
+typedef enum lm_decoder_tensor_role {
+    LM_DECODER_TENSOR_TOKEN_EMBEDDING = 0,
+    LM_DECODER_TENSOR_OUTPUT,
+    LM_DECODER_TENSOR_OUTPUT_NORM,
+    LM_DECODER_TENSOR_ATTN_NORM,
+    LM_DECODER_TENSOR_ATTN_Q,
+    LM_DECODER_TENSOR_ATTN_K,
+    LM_DECODER_TENSOR_ATTN_V,
+    LM_DECODER_TENSOR_ATTN_OUTPUT,
+    LM_DECODER_TENSOR_FFN_NORM,
+    LM_DECODER_TENSOR_FFN_GATE,
+    LM_DECODER_TENSOR_FFN_DOWN,
+    LM_DECODER_TENSOR_FFN_UP
+} lm_decoder_tensor_role;
+
+typedef struct lm_decoder_tensor_mapping {
+    lm_decoder_tensor_role role;
+    uint32_t layer_index;
+    uint32_t rank;
+    uint64_t dims[8];
+    uint32_t type;
+} lm_decoder_tensor_mapping;
+
+#define LM_DECODER_PLAN_MAX_LAYERS 256u
+typedef struct lm_decoder_graph_plan {
+    uint32_t layer_count;
+    uint32_t global_role_mask;
+    uint32_t layer_role_mask[LM_DECODER_PLAN_MAX_LAYERS];
+} lm_decoder_graph_plan;
+
 lm_status lm_moe_map_mixtral_tensor(const lm_model_tensor_info *descriptor,
                                     uint32_t expected_experts,
                                     lm_moe_tensor_mapping *out_mapping);
+lm_status lm_decoder_map_llama_tensor(const lm_model_tensor_info *descriptor,
+                                      lm_decoder_tensor_mapping *out_mapping);
+lm_status lm_decoder_graph_plan_build(const lm_model_tensor_info *descriptors,
+                                      uint64_t descriptor_count,
+                                      lm_decoder_graph_plan *out_plan);
 
 lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
                            uint32_t experts_per_token, lm_moe_route_policy policy,

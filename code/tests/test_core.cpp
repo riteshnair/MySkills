@@ -246,6 +246,27 @@ static void test_native_model_tensor_binding() {
     for (float &value : bound_q4_k_input) value = 1.0f;
     assert(lm_cpu_dot_q4_k(&bound_q4_k_tensor, bound_q4_k_input, 256u, &bound_q4_k_result) == LM_OK);
     assert(bound_q4_k_result == 256.0f);
+    lm_model_tensor_binding matrix_binding = q4_k_binding;
+    matrix_binding.descriptor.rank = 2u;
+    matrix_binding.descriptor.dims[0] = 1u;
+    matrix_binding.descriptor.dims[1] = 256u;
+    unsigned char matrix_scratch[144] = {};
+    float matrix_input[256] = {};
+    for (float &value : matrix_input) value = 1.0f;
+    float matrix_cpu[1] = {};
+    assert(lm_model_tensor_binding_matvec_q4_k_cpu(&matrix_binding, matrix_scratch,
+                                                   sizeof(matrix_scratch), 1u, 256u,
+                                                   matrix_input, matrix_cpu) == LM_OK);
+    assert(matrix_cpu[0] == 256.0f);
+    uint32_t model_vulkan_devices = 0u;
+    if (lm_vulkan_device_count(&model_vulkan_devices) == LM_OK && model_vulkan_devices != 0u) {
+        float matrix_vulkan[1] = {};
+        assert(lm_model_tensor_binding_matvec_q4_k_vulkan(&matrix_binding, matrix_scratch,
+                                                          sizeof(matrix_scratch), 1u, 256u,
+                                                          "matvec_q4_k_f32.comp.spv", 0u,
+                                                          matrix_input, matrix_vulkan) == LM_OK);
+        assert(matrix_vulkan[0] == matrix_cpu[0]);
+    }
     assert(lm_model_tensor_binding_view(&q4_binding, q4_bytes, sizeof(q4_bytes) - 1u, &q4_tensor) == LM_ERR_CAPACITY);
     lm_model_close(model);
     std::remove(path);
@@ -387,6 +408,39 @@ static void test_safetensors_parser() {
 }
 
 static void test_cpu_decoder() {
+    lm_model_tensor_info mapped_descriptor{};
+    std::strcpy(mapped_descriptor.name, "blk.7.attn_q.weight");
+    mapped_descriptor.rank = 2u;
+    mapped_descriptor.dims[0] = 256u;
+    mapped_descriptor.dims[1] = 256u;
+    mapped_descriptor.type = 12u;
+    lm_decoder_tensor_mapping mapped{};
+    assert(lm_decoder_map_llama_tensor(&mapped_descriptor, &mapped) == LM_OK);
+    assert(mapped.role == LM_DECODER_TENSOR_ATTN_Q && mapped.layer_index == 7u &&
+           mapped.rank == 2u && mapped.dims[0] == 256u && mapped.type == 12u);
+    std::strcpy(mapped_descriptor.name, "token_embd.weight");
+    assert(lm_decoder_map_llama_tensor(&mapped_descriptor, &mapped) == LM_OK);
+    assert(mapped.role == LM_DECODER_TENSOR_TOKEN_EMBEDDING && mapped.layer_index == 0u);
+    std::strcpy(mapped_descriptor.name, "blk.7.attn_q.bias");
+    assert(lm_decoder_map_llama_tensor(&mapped_descriptor, &mapped) == LM_ERR_UNSUPPORTED);
+    const char *graph_names[] = {
+        "token_embd.weight", "output.weight", "output_norm.weight",
+        "blk.0.attn_norm.weight", "blk.0.attn_q.weight", "blk.0.attn_k.weight",
+        "blk.0.attn_v.weight", "blk.0.attn_output.weight", "blk.0.ffn_norm.weight",
+        "blk.0.ffn_gate.weight", "blk.0.ffn_down.weight", "blk.0.ffn_up.weight"};
+    lm_model_tensor_info graph_descriptors[12] = {};
+    for (unsigned i = 0u; i < 12u; ++i) {
+        std::strcpy(graph_descriptors[i].name, graph_names[i]);
+        graph_descriptors[i].rank = 1u;
+        graph_descriptors[i].dims[0] = 256u;
+    }
+    lm_decoder_graph_plan graph_plan{};
+    assert(lm_decoder_graph_plan_build(graph_descriptors, 12u, &graph_plan) == LM_OK);
+    assert(graph_plan.layer_count == 1u && graph_plan.global_role_mask == 7u &&
+           graph_plan.layer_role_mask[0] == 0xff8u);
+    assert(lm_decoder_graph_plan_build(graph_descriptors, 11u, &graph_plan) == LM_ERR_UNSUPPORTED);
+    std::strcpy(graph_descriptors[11].name, "blk.0.ffn_up.bias");
+    assert(lm_decoder_graph_plan_build(graph_descriptors, 12u, &graph_plan) == LM_ERR_UNSUPPORTED);
     const float embedding[] = {1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     const float gamma[] = {1.0f, 1.0f};
     const float identity[] = {1.0f, 0.0f, 0.0f, 1.0f};

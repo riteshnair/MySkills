@@ -660,6 +660,55 @@ lm_status lm_model_tensor_binding_read(const lm_model_tensor_binding *binding, v
     return lm_model_tensor_binding_view(binding, data, bytes, out_tensor);
 }
 
+static lm_status validate_q4_k_binding_matvec(const lm_model_tensor_binding *binding,
+                                                uint32_t rows, uint32_t columns,
+                                                uint64_t *payload_bytes, uint32_t *blocks_per_row) {
+    if (!binding || !payload_bytes || !blocks_per_row || rows == 0u || columns == 0u || columns % 256u != 0u ||
+        binding->quant_format != LM_QUANT_GGML_Q4_K || binding->descriptor.rank != 2u ||
+        binding->descriptor.dims[0] != rows || binding->descriptor.dims[1] != columns)
+        return LM_ERR_ARGUMENT;
+    const uint64_t blocks = static_cast<uint64_t>(columns) / 256u;
+    const uint64_t row_bytes = blocks * 144u;
+    const uint64_t expected = row_bytes * static_cast<uint64_t>(rows);
+    if (blocks > UINT32_MAX || row_bytes == 0u || expected != binding->span.bytes) return LM_ERR_CAPACITY;
+    *payload_bytes = expected;
+    *blocks_per_row = static_cast<uint32_t>(blocks);
+    return LM_OK;
+}
+
+lm_status lm_model_tensor_binding_matvec_q4_k_cpu(const lm_model_tensor_binding *binding,
+                                                  void *packed_scratch, uint64_t scratch_bytes,
+                                                  uint32_t rows, uint32_t columns,
+                                                  const float *input, float *out) {
+    if (!packed_scratch || !input || !out) return LM_ERR_ARGUMENT;
+    uint64_t payload_bytes = 0u;
+    uint32_t blocks_per_row = 0u;
+    const lm_status valid = validate_q4_k_binding_matvec(binding, rows, columns, &payload_bytes, &blocks_per_row);
+    if (valid != LM_OK) return valid;
+    if (scratch_bytes < payload_bytes) return LM_ERR_CAPACITY;
+    lm_tensor tensor{};
+    const lm_status read = lm_model_tensor_binding_read(binding, packed_scratch, payload_bytes, &tensor);
+    if (read != LM_OK) return read;
+    return lm_cpu_matvec_q4_k(&tensor, input, rows, columns, out);
+}
+
+lm_status lm_model_tensor_binding_matvec_q4_k_vulkan(const lm_model_tensor_binding *binding,
+                                                     void *packed_scratch, uint64_t scratch_bytes,
+                                                     uint32_t rows, uint32_t columns,
+                                                     const char *spv_path, uint32_t device_index,
+                                                     const float *input, float *out) {
+    if (!packed_scratch || !input || !out || !spv_path) return LM_ERR_ARGUMENT;
+    uint64_t payload_bytes = 0u;
+    uint32_t blocks_per_row = 0u;
+    const lm_status valid = validate_q4_k_binding_matvec(binding, rows, columns, &payload_bytes, &blocks_per_row);
+    if (valid != LM_OK) return valid;
+    if (scratch_bytes < payload_bytes) return LM_ERR_CAPACITY;
+    const lm_status read = lm_file_span_read(&binding->span, 0u, packed_scratch, static_cast<size_t>(payload_bytes));
+    if (read != LM_OK) return read;
+    return lm_vulkan_matvec_q4_k(spv_path, device_index, packed_scratch, rows,
+                                 blocks_per_row, input, out);
+}
+
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out) {
     if (!a || !b || !out || count == 0u) return LM_ERR_ARGUMENT;
     float sum = 0.0f;

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <cstdio>
 #include <vector>
 
 struct lm_cpu_decoder {
@@ -60,6 +61,73 @@ void apply_rope(float *vector, uint32_t size, uint32_t position, float theta) {
 }
 
 } // namespace
+
+lm_status lm_decoder_map_llama_tensor(const lm_model_tensor_info *descriptor,
+                                      lm_decoder_tensor_mapping *out_mapping) {
+    if (!descriptor || !out_mapping || descriptor->name[0] == '\0' || descriptor->rank == 0u || descriptor->rank > 8u)
+        return LM_ERR_ARGUMENT;
+    std::memset(out_mapping, 0, sizeof(*out_mapping));
+    out_mapping->rank = descriptor->rank;
+    out_mapping->type = descriptor->type;
+    for (uint32_t i = 0u; i < descriptor->rank; ++i) out_mapping->dims[i] = descriptor->dims[i];
+    if (std::strcmp(descriptor->name, "token_embd.weight") == 0)
+        out_mapping->role = LM_DECODER_TENSOR_TOKEN_EMBEDDING;
+    else if (std::strcmp(descriptor->name, "output.weight") == 0)
+        out_mapping->role = LM_DECODER_TENSOR_OUTPUT;
+    else if (std::strcmp(descriptor->name, "output_norm.weight") == 0)
+        out_mapping->role = LM_DECODER_TENSOR_OUTPUT_NORM;
+    else {
+        unsigned layer = 0u;
+        char suffix[64] = {};
+        if (std::sscanf(descriptor->name, "blk.%u.%63s", &layer, suffix) != 2 || layer > UINT32_MAX)
+            return LM_ERR_UNSUPPORTED;
+        out_mapping->layer_index = static_cast<uint32_t>(layer);
+        if (std::strcmp(suffix, "attn_norm.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_ATTN_NORM;
+        else if (std::strcmp(suffix, "attn_q.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_ATTN_Q;
+        else if (std::strcmp(suffix, "attn_k.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_ATTN_K;
+        else if (std::strcmp(suffix, "attn_v.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_ATTN_V;
+        else if (std::strcmp(suffix, "attn_output.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_ATTN_OUTPUT;
+        else if (std::strcmp(suffix, "ffn_norm.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_FFN_NORM;
+        else if (std::strcmp(suffix, "ffn_gate.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_FFN_GATE;
+        else if (std::strcmp(suffix, "ffn_down.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_FFN_DOWN;
+        else if (std::strcmp(suffix, "ffn_up.weight") == 0) out_mapping->role = LM_DECODER_TENSOR_FFN_UP;
+        else return LM_ERR_UNSUPPORTED;
+    }
+    return LM_OK;
+}
+
+lm_status lm_decoder_graph_plan_build(const lm_model_tensor_info *descriptors,
+                                      uint64_t descriptor_count,
+                                      lm_decoder_graph_plan *out_plan) {
+    if (!descriptors || !out_plan || descriptor_count == 0u ||
+        descriptor_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+        return LM_ERR_ARGUMENT;
+    std::memset(out_plan, 0, sizeof(*out_plan));
+    const uint32_t global_required = (1u << LM_DECODER_TENSOR_TOKEN_EMBEDDING) |
+                                     (1u << LM_DECODER_TENSOR_OUTPUT) |
+                                     (1u << LM_DECODER_TENSOR_OUTPUT_NORM);
+    const uint32_t layer_required = ((1u << (LM_DECODER_TENSOR_FFN_UP + 1u)) - 1u) & ~global_required;
+    for (uint64_t i = 0u; i < descriptor_count; ++i) {
+        lm_decoder_tensor_mapping mapping{};
+        const lm_status status = lm_decoder_map_llama_tensor(&descriptors[static_cast<size_t>(i)], &mapping);
+        if (status != LM_OK) return status;
+        if (mapping.role <= LM_DECODER_TENSOR_OUTPUT_NORM) {
+            const uint32_t bit = 1u << mapping.role;
+            if ((out_plan->global_role_mask & bit) != 0u) return LM_ERR_PARSE;
+            out_plan->global_role_mask |= bit;
+        } else {
+            if (mapping.layer_index >= LM_DECODER_PLAN_MAX_LAYERS) return LM_ERR_CAPACITY;
+            const uint32_t bit = 1u << mapping.role;
+            if ((out_plan->layer_role_mask[mapping.layer_index] & bit) != 0u) return LM_ERR_PARSE;
+            out_plan->layer_role_mask[mapping.layer_index] |= bit;
+            if (mapping.layer_index + 1u > out_plan->layer_count) out_plan->layer_count = mapping.layer_index + 1u;
+        }
+    }
+    if (out_plan->global_role_mask != global_required || out_plan->layer_count == 0u) return LM_ERR_UNSUPPORTED;
+    for (uint32_t layer = 0u; layer < out_plan->layer_count; ++layer)
+        if (out_plan->layer_role_mask[layer] != layer_required) return LM_ERR_UNSUPPORTED;
+    return LM_OK;
+}
 
 lm_status lm_cpu_decoder_create(const lm_cpu_decoder_config *config, lm_cpu_decoder **out_decoder) {
     if (!config || !out_decoder || config->vocab_size == 0u || config->hidden_size == 0u || config->max_context == 0u ||
