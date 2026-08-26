@@ -90,6 +90,15 @@ void lm_file_close(lm_file *file);
 lm_status lm_file_size(const lm_file *file, uint64_t *out_bytes);
 lm_status lm_file_read(lm_file *file, uint64_t offset, void *dst, size_t bytes);
 
+typedef struct lm_file_span {
+    lm_file *file;
+    uint64_t offset;
+    uint64_t bytes;
+} lm_file_span;
+
+lm_status lm_file_span_make(lm_file *file, uint64_t offset, uint64_t bytes, lm_file_span *out_span);
+lm_status lm_file_span_read(const lm_file_span *span, uint64_t offset, void *dst, size_t bytes);
+
 typedef enum lm_dtype {
     LM_DTYPE_F32 = 0,
     LM_DTYPE_F16,

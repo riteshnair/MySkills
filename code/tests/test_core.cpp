@@ -95,6 +95,12 @@ static void test_file_access() {
     char readback[5] = {};
     assert(lm_file_read(file, 3u, readback, 4u) == LM_OK);
     assert(std::memcmp(readback, "3456", 4u) == 0);
+    lm_file_span span{};
+    assert(lm_file_span_make(file, 2u, 5u, &span) == LM_OK);
+    std::memset(readback, 0, sizeof(readback));
+    assert(lm_file_span_read(&span, 1u, readback, 4u) == LM_OK);
+    assert(std::memcmp(readback, "3456", 4u) == 0);
+    assert(lm_file_span_read(&span, 2u, readback, 4u) == LM_ERR_RANGE);
     assert(lm_file_read(file, size, nullptr, 0u) == LM_OK);
     assert(lm_file_read(file, 8u, readback, 4u) == LM_ERR_RANGE);
     lm_file_close(file);

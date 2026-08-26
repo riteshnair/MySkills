@@ -33,6 +33,22 @@ lm_status lm_file_size(const lm_file *file, uint64_t *out_bytes) {
     return LM_OK;
 }
 
+lm_status lm_file_span_make(lm_file *file, uint64_t offset, uint64_t bytes, lm_file_span *out_span) {
+    if (!file || !out_span) return LM_ERR_ARGUMENT;
+    if (offset > file->bytes || bytes > file->bytes - offset) return LM_ERR_RANGE;
+    out_span->file = file;
+    out_span->offset = offset;
+    out_span->bytes = bytes;
+    return LM_OK;
+}
+
+lm_status lm_file_span_read(const lm_file_span *span, uint64_t offset, void *dst, size_t bytes) {
+    if (!span || !span->file || (!dst && bytes != 0u)) return LM_ERR_ARGUMENT;
+    if (offset > span->bytes || static_cast<uint64_t>(bytes) > span->bytes - offset) return LM_ERR_RANGE;
+    if (span->offset > std::numeric_limits<uint64_t>::max() - offset) return LM_ERR_RANGE;
+    return lm_file_read(span->file, span->offset + offset, dst, bytes);
+}
+
 lm_status lm_file_read(lm_file *file, uint64_t offset, void *dst, size_t bytes) {
     if (!file || (!dst && bytes != 0u)) return LM_ERR_ARGUMENT;
     if (offset > file->bytes || static_cast<uint64_t>(bytes) > file->bytes - offset)
