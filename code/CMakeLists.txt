@@ -18,11 +18,11 @@ if(LM_ENABLE_VULKAN)
     find_package(Vulkan QUIET)
 endif()
 if(Vulkan_FOUND)
-    target_sources(lm_core PRIVATE vulkan/device.cpp vulkan/dp4.cpp vulkan/scalar.cpp vulkan/dispatch.cpp)
+    target_sources(lm_core PRIVATE vulkan/device.cpp vulkan/dp4.cpp vulkan/scalar.cpp vulkan/q4_k.cpp vulkan/dispatch.cpp)
     target_link_libraries(lm_core PUBLIC Vulkan::Vulkan)
     target_compile_definitions(lm_core PUBLIC LM_HAS_VULKAN=1)
 else()
-    target_sources(lm_core PRIVATE vulkan/device_stub.cpp vulkan/dp4_stub.cpp vulkan/scalar_stub.cpp vulkan/dispatch_stub.cpp)
+    target_sources(lm_core PRIVATE vulkan/device_stub.cpp vulkan/dp4_stub.cpp vulkan/scalar_stub.cpp vulkan/q4_k_stub.cpp vulkan/dispatch_stub.cpp)
     target_compile_definitions(lm_core PUBLIC LM_HAS_VULKAN=0)
 endif()
 
@@ -46,9 +46,17 @@ if(GLSLANG_VALIDATOR)
                 -o ${CMAKE_CURRENT_BINARY_DIR}/dot_f32_scalar.comp.spv
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/dot_f32_scalar.comp
         VERBATIM)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dot_q4_k_f32.comp.spv
+        COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1
+                ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/dot_q4_k_f32.comp
+                -o ${CMAKE_CURRENT_BINARY_DIR}/dot_q4_k_f32.comp.spv
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/dot_q4_k_f32.comp
+        VERBATIM)
     add_custom_target(lm-vulkan-shaders ALL
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dot_i8_dp4.comp.spv
-                ${CMAKE_CURRENT_BINARY_DIR}/dot_f32_scalar.comp.spv)
+                ${CMAKE_CURRENT_BINARY_DIR}/dot_f32_scalar.comp.spv
+                ${CMAKE_CURRENT_BINARY_DIR}/dot_q4_k_f32.comp.spv)
 endif()
 
 if(LM_BUILD_TESTS)

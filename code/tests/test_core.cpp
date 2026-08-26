@@ -122,6 +122,21 @@ static void test_tensor_and_buffer() {
     assert(lm_cpu_dot_q4_0(&q4_weights, q8_input, 32u, &q4_result) == LM_OK);
     assert(q4_result == 32.0f);
     assert(lm_tensor_make_q4_0_view(q4_bytes, 17u, 1u, quant_dims, &q4_weights) == LM_ERR_CAPACITY);
+    unsigned char q4_k_bytes[144] = {};
+    q4_k_bytes[0] = 0x00u;
+    q4_k_bytes[1] = 0x3cu;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_bytes[4u + i] = 1u;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_bytes[12u + i] = 1u;
+    for (unsigned i = 0u; i < 128u; ++i) q4_k_bytes[16u + i] = 0x11u;
+    const uint32_t q4_k_dims[1] = {256u};
+    lm_tensor q4_k_weights{};
+    assert(lm_tensor_make_q4_k_view(q4_k_bytes, sizeof(q4_k_bytes), 1u, q4_k_dims, &q4_k_weights) == LM_OK);
+    float q4_k_result = 0.0f;
+    float q4_k_ones[256] = {};
+    for (float &value : q4_k_ones) value = 1.0f;
+    assert(lm_cpu_dot_q4_k(&q4_k_weights, q4_k_ones, 256u, &q4_k_result) == LM_OK);
+    assert(q4_k_result == 256.0f);
+    assert(lm_tensor_make_q4_k_view(q4_k_bytes, sizeof(q4_k_bytes) - 1u, 1u, q4_k_dims, &q4_k_weights) == LM_ERR_CAPACITY);
     lm_buffer_free(buffer);
 }
 
@@ -159,29 +174,35 @@ static void test_native_model_tensor_binding() {
         for (unsigned i = 0u; i < 8u; ++i) bytes->push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
     };
     auto put_descriptor = [&put_u32, &put_u64](std::vector<unsigned char> *bytes, const char *name,
-                                                uint32_t type, uint64_t offset) {
+                                                uint32_t type, uint64_t offset, uint64_t dimension) {
         const size_t length = std::strlen(name);
         put_u64(bytes, length);
         bytes->insert(bytes->end(), name, name + length);
         put_u32(bytes, 1u);
-        put_u64(bytes, 32u);
+        put_u64(bytes, dimension);
         put_u32(bytes, type);
         put_u64(bytes, offset);
     };
     std::vector<unsigned char> gguf(24u, 0u);
     gguf[0] = 'G'; gguf[1] = 'G'; gguf[2] = 'U'; gguf[3] = 'F';
     gguf[4] = 3u;
-    gguf[8] = 2u;
-    put_descriptor(&gguf, "q4", 2u, 0u);
-    put_descriptor(&gguf, "q8", 8u, 32u);
+    gguf[8] = 3u;
+    put_descriptor(&gguf, "q4", 2u, 0u, 32u);
+    put_descriptor(&gguf, "q8", 8u, 32u, 32u);
+    put_descriptor(&gguf, "q4_k", 12u, 96u, 256u);
     const size_t header_size = (gguf.size() + 31u) & ~static_cast<size_t>(31u);
-    gguf.resize(header_size + 32u + 34u, 0u);
+    gguf.resize(header_size + 96u + 144u, 0u);
     gguf[header_size] = 0x00u;
     gguf[header_size + 1u] = 0x3cu;
     for (unsigned i = 0u; i < 16u; ++i) gguf[header_size + 2u + i] = 0x99u;
     gguf[header_size + 32u] = 0x00u;
     gguf[header_size + 33u] = 0x3cu;
     for (unsigned i = 0u; i < 32u; ++i) gguf[header_size + 34u + i] = static_cast<unsigned char>(i + 1u);
+    gguf[header_size + 96u] = 0x00u;
+    gguf[header_size + 97u] = 0x3cu;
+    for (unsigned i = 0u; i < 4u; ++i) gguf[header_size + 100u + i] = 1u;
+    for (unsigned i = 0u; i < 4u; ++i) gguf[header_size + 108u + i] = 1u;
+    for (unsigned i = 0u; i < 128u; ++i) gguf[header_size + 112u + i] = 0x11u;
     const char *path = "test-native-binding.gguf";
     {
         std::ofstream file(path, std::ios::binary);
@@ -189,7 +210,9 @@ static void test_native_model_tensor_binding() {
     }
     lm_model_file *model = nullptr;
     char error[128] = {};
-    assert(lm_model_open(path, &model, error, sizeof(error)) == LM_OK);
+    const lm_status opened = lm_model_open(path, &model, error, sizeof(error));
+    if (opened != LM_OK) std::fprintf(stderr, "native_binding_open=%s error=%s\\n", lm_status_name(opened), error);
+    assert(opened == LM_OK);
     lm_model_tensor_binding q4_binding{};
     assert(lm_model_tensor_bind_native(model, 0u, &q4_binding) == LM_OK);
     assert(q4_binding.elements == 32u && q4_binding.span.bytes == 18u &&
@@ -211,6 +234,18 @@ static void test_native_model_tensor_binding() {
     lm_tensor q8_tensor{};
     assert(lm_model_tensor_binding_read(&q8_binding, q8_bytes, sizeof(q8_bytes), &q8_tensor) == LM_OK);
     assert(lm_cpu_dot_q8_0(&q8_tensor, input, 32u, &result) == LM_OK && result == 528.0f);
+    lm_model_tensor_binding q4_k_binding{};
+    assert(lm_model_tensor_bind_native(model, 2u, &q4_k_binding) == LM_OK);
+    assert(q4_k_binding.elements == 256u && q4_k_binding.span.bytes == 144u &&
+           q4_k_binding.quant_format == LM_QUANT_GGML_Q4_K);
+    unsigned char bound_q4_k[144] = {};
+    lm_tensor bound_q4_k_tensor{};
+    assert(lm_model_tensor_binding_read(&q4_k_binding, bound_q4_k, sizeof(bound_q4_k), &bound_q4_k_tensor) == LM_OK);
+    float bound_q4_k_result = 0.0f;
+    float bound_q4_k_input[256] = {};
+    for (float &value : bound_q4_k_input) value = 1.0f;
+    assert(lm_cpu_dot_q4_k(&bound_q4_k_tensor, bound_q4_k_input, 256u, &bound_q4_k_result) == LM_OK);
+    assert(bound_q4_k_result == 256.0f);
     assert(lm_model_tensor_binding_view(&q4_binding, q4_bytes, sizeof(q4_bytes) - 1u, &q4_tensor) == LM_ERR_CAPACITY);
     lm_model_close(model);
     std::remove(path);
@@ -218,7 +253,7 @@ static void test_native_model_tensor_binding() {
     std::vector<unsigned char> malformed(24u, 0u);
     malformed[0] = 'G'; malformed[1] = 'G'; malformed[2] = 'U'; malformed[3] = 'F'; malformed[4] = 3u;
     malformed[8] = 1u;
-    put_descriptor(&malformed, "short", 2u, 0u);
+    put_descriptor(&malformed, "short", 2u, 0u, 32u);
     const size_t malformed_header = (malformed.size() + 31u) & ~static_cast<size_t>(31u);
     malformed.resize(malformed_header + 17u, 0u);
     const char *bad_path = "test-short-native-binding.gguf";
@@ -410,7 +445,56 @@ static void test_moe_router() {
     assert(lm_cpu_moe_route(bad_logits, 2u, 1u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_ERR_RANGE);
     assert(lm_cpu_moe_route(logits, 4u, 3u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_OK);
     assert(lm_cpu_moe_route(logits, 4u, 0u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_ERR_ARGUMENT);
+    lm_model_tensor_info gate_up{};
+    std::strncpy(gate_up.name, "layers.7.feed_forward.experts.w1", sizeof(gate_up.name) - 1u);
+    gate_up.rank = 3u;
+    gate_up.dims[0] = 4u; gate_up.dims[1] = 8u; gate_up.dims[2] = 3u;
+    lm_moe_tensor_mapping mapping{};
+    assert(lm_moe_map_mixtral_tensor(&gate_up, 3u, &mapping) == LM_OK);
+    assert(mapping.role == LM_MOE_TENSOR_GATE_UP_EXPERT && mapping.layer_index == 7u &&
+           mapping.expert_axis == 2u && mapping.expert_count == 3u && mapping.dims[1] == 8u);
+    lm_model_tensor_info down = gate_up;
+    std::strncpy(down.name, "layers.7.feed_forward.experts.w2", sizeof(down.name) - 1u);
+    down.dims[0] = 8u; down.dims[1] = 4u;
+    assert(lm_moe_map_mixtral_tensor(&down, 3u, &mapping) == LM_OK);
+    assert(mapping.role == LM_MOE_TENSOR_DOWN_EXPERT && mapping.layer_index == 7u);
+    lm_model_tensor_info unknown = gate_up;
+    std::strncpy(unknown.name, "model.layers.7.mlp.experts.gate_proj", sizeof(unknown.name) - 1u);
+    assert(lm_moe_map_mixtral_tensor(&unknown, 3u, &mapping) == LM_ERR_UNSUPPORTED);
+    lm_model_tensor_info wrong_experts = gate_up;
+    wrong_experts.dims[2] = 4u;
+    assert(lm_moe_map_mixtral_tensor(&wrong_experts, 3u, &mapping) == LM_ERR_PARSE);
+    lm_model_tensor_info odd_gate = gate_up;
+    odd_gate.dims[1] = 7u;
+    assert(lm_moe_map_mixtral_tensor(&odd_gate, 3u, &mapping) == LM_ERR_PARSE);
+    lm_moe_route mlp_route{};
+    mlp_route.expert_count = 2u;
+    mlp_route.experts_per_token = 1u;
+    mlp_route.selected[0] = 1u;
+    mlp_route.weights[0] = 1.0f;
+    const uint32_t gate_up_dims[3] = {2u, 8u, 2u};
+    const uint32_t down_dims[3] = {4u, 2u, 2u};
+    std::vector<float> gate_up_values(32u, 1.0f);
+    std::vector<float> down_values(16u, 1.0f);
+    lm_tensor gate_up_tensor{};
+    lm_tensor down_tensor{};
+    assert(lm_tensor_make_view(gate_up_values.data(), gate_up_values.size() * sizeof(float), LM_DTYPE_F32,
+                               3u, gate_up_dims, &gate_up_tensor) == LM_OK);
+    assert(lm_tensor_make_view(down_values.data(), down_values.size() * sizeof(float), LM_DTYPE_F32,
+                               3u, down_dims, &down_tensor) == LM_OK);
+    const float mlp_input[2] = {0.5f, 0.5f};
+    float selected_mlp_output[2] = {};
+    assert(lm_cpu_moe_selected_expert_mlp(&mlp_route, &gate_up_tensor, &down_tensor, 2u, 4u,
+                                          mlp_input, selected_mlp_output) == LM_OK);
+    const float expected_mlp = 4.0f * (1.0f / (1.0f + std::exp(-1.0f)));
+    assert(std::fabs(selected_mlp_output[0] - expected_mlp) < 1.0e-5f &&
+           std::fabs(selected_mlp_output[1] - expected_mlp) < 1.0e-5f);
+    float combined_mlp[2] = {};
+    assert(lm_cpu_moe_combine(&mlp_route, selected_mlp_output, 2u, combined_mlp) == LM_OK);
+    assert(std::fabs(combined_mlp[0] - expected_mlp) < 1.0e-5f &&
+           std::fabs(combined_mlp[1] - expected_mlp) < 1.0e-5f);
 }
+
 
 static void test_kv_pages() {
     lm_kv_cache *cache = nullptr;
@@ -459,6 +543,18 @@ static void test_vulkan_dp4() {
     int32_t gpu_result = 0;
     assert(lm_vulkan_dot_i8_dp4("dot_i8_dp4.comp.spv", 0u, a, b, 1u, &gpu_result) == LM_OK);
     assert(gpu_result == 70);
+    unsigned char q4_k_bytes[144] = {};
+    q4_k_bytes[0] = 0x00u;
+    q4_k_bytes[1] = 0x3cu;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_bytes[4u + i] = 1u;
+    for (unsigned i = 0u; i < 4u; ++i) q4_k_bytes[12u + i] = 1u;
+    for (unsigned i = 0u; i < 128u; ++i) q4_k_bytes[16u + i] = 0x11u;
+    float q4_k_input[256] = {};
+    for (float &value : q4_k_input) value = 1.0f;
+    float q4_k_gpu_result = 0.0f;
+    assert(lm_vulkan_dot_q4_k("dot_q4_k_f32.comp.spv", 0u, q4_k_bytes, 1u,
+                              q4_k_input, &q4_k_gpu_result) == LM_OK);
+    assert(q4_k_gpu_result == 256.0f);
     const float scalar_a[] = {1.0f, 2.0f, 3.0f, 4.0f};
     const float scalar_b[] = {5.0f, 6.0f, 7.0f, 8.0f};
     float scalar_result = 0.0f;

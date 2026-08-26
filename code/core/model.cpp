@@ -56,6 +56,10 @@ lm_status native_contract(const lm_model_tensor_info &descriptor, lm_quant_forma
         *format = LM_QUANT_GGML_Q8_0;
         *elements_per_block = 32u;
         *bytes_per_block = 34u;
+    } else if (descriptor.type == 12u) {
+        *format = LM_QUANT_GGML_Q4_K;
+        *elements_per_block = 256u;
+        *bytes_per_block = 144u;
     } else {
         return LM_ERR_UNSUPPORTED;
     }
@@ -642,6 +646,8 @@ lm_status lm_model_tensor_binding_view(const lm_model_tensor_binding *binding, v
         return lm_tensor_make_q4_0_view(data, bytes, binding->descriptor.rank, dims, out_tensor);
     if (binding->quant_format == LM_QUANT_GGML_Q8_0)
         return lm_tensor_make_q8_0_view(data, bytes, binding->descriptor.rank, dims, out_tensor);
+    if (binding->quant_format == LM_QUANT_GGML_Q4_K)
+        return lm_tensor_make_q4_k_view(data, bytes, binding->descriptor.rank, dims, out_tensor);
     return LM_ERR_UNSUPPORTED;
 }
 
@@ -734,6 +740,60 @@ lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
             if (!std::isfinite(value)) return LM_ERR_RANGE;
             const int8_t quantized = static_cast<int8_t>(packed[base + 2u + i]);
             sum += scale * static_cast<float>(quantized) * value;
+        }
+    }
+    if (!std::isfinite(sum)) return LM_ERR_RANGE;
+    *out = sum;
+    return LM_OK;
+}
+
+void q4_k_scale_min(unsigned index, const unsigned char *scales, unsigned char *scale, unsigned char *minimum) {
+    if (index < 4u) {
+        *scale = static_cast<unsigned char>(scales[index] & 63u);
+        *minimum = static_cast<unsigned char>(scales[index + 4u] & 63u);
+    } else {
+        *scale = static_cast<unsigned char>((scales[index + 4u] & 15u) | ((scales[index - 4u] >> 6u) << 4u));
+        *minimum = static_cast<unsigned char>((scales[index + 4u] >> 4u) | ((scales[index] >> 6u) << 4u));
+    }
+}
+
+lm_status lm_cpu_dot_q4_k(const lm_tensor *weights, const float *input,
+                          uint64_t elements, float *out) {
+    if (!weights || !input || !out || elements == 0u || elements % 256u != 0u ||
+        weights->quant_format != LM_QUANT_GGML_Q4_K || weights->dtype != LM_DTYPE_U8)
+        return LM_ERR_ARGUMENT;
+    if (lm_tensor_validate(weights) != LM_OK) return LM_ERR_RANGE;
+    const uint64_t required_bytes = (elements / 256u) * 144u;
+    if (required_bytes != weights->bytes) return LM_ERR_CAPACITY;
+    const unsigned char *packed = static_cast<const unsigned char *>(weights->data);
+    float sum = 0.0f;
+    for (uint64_t block = 0u; block < elements / 256u; ++block) {
+        const size_t base = static_cast<size_t>(block * 144u);
+        const float d = half_to_float(static_cast<uint16_t>(packed[base]) | static_cast<uint16_t>(packed[base + 1u] << 8u));
+        const float minimum_scale = half_to_float(static_cast<uint16_t>(packed[base + 2u]) | static_cast<uint16_t>(packed[base + 3u] << 8u));
+        if (!std::isfinite(d) || !std::isfinite(minimum_scale)) return LM_ERR_RANGE;
+        const unsigned char *scales = packed + base + 4u;
+        const unsigned char *quantized = packed + base + 16u;
+        unsigned scale_index = 0u;
+        for (unsigned group = 0u; group < 4u; ++group) {
+            unsigned char scale = 0u;
+            unsigned char minimum = 0u;
+            q4_k_scale_min(scale_index++, scales, &scale, &minimum);
+            const float d1 = d * static_cast<float>(scale);
+            const float m1 = minimum_scale * static_cast<float>(minimum);
+            q4_k_scale_min(scale_index++, scales, &scale, &minimum);
+            const float d2 = d * static_cast<float>(scale);
+            const float m2 = minimum_scale * static_cast<float>(minimum);
+            for (unsigned i = 0u; i < 32u; ++i) {
+                const float value = input[block * 256u + group * 64u + i];
+                if (!std::isfinite(value)) return LM_ERR_RANGE;
+                sum += (d1 * static_cast<float>(quantized[group * 32u + i] & 15u) - m1) * value;
+            }
+            for (unsigned i = 0u; i < 32u; ++i) {
+                const float value = input[block * 256u + group * 64u + 32u + i];
+                if (!std::isfinite(value)) return LM_ERR_RANGE;
+                sum += (d2 * static_cast<float>(quantized[group * 32u + i] >> 4u) - m2) * value;
+            }
         }
     }
     if (!std::isfinite(sum)) return LM_ERR_RANGE;

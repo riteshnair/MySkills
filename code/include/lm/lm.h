@@ -120,7 +120,8 @@ typedef enum lm_quant_format {
     LM_QUANT_NONE = 0,
     LM_QUANT_BLOCK_STORAGE,
     LM_QUANT_GGML_Q4_0,
-    LM_QUANT_GGML_Q8_0
+    LM_QUANT_GGML_Q8_0,
+    LM_QUANT_GGML_Q4_K
 } lm_quant_format;
 
 typedef struct lm_tensor {
@@ -150,6 +151,9 @@ lm_status lm_tensor_make_q4_0_view(void *data, uint64_t bytes,
                                    uint32_t rank, const uint32_t *dims,
                                    lm_tensor *out_tensor);
 lm_status lm_tensor_make_q8_0_view(void *data, uint64_t bytes,
+                                   uint32_t rank, const uint32_t *dims,
+                                   lm_tensor *out_tensor);
+lm_status lm_tensor_make_q4_k_view(void *data, uint64_t bytes,
                                    uint32_t rank, const uint32_t *dims,
                                    lm_tensor *out_tensor);
 lm_status lm_buffer_alloc(uint64_t bytes, lm_buffer **out_buffer);
@@ -224,6 +228,9 @@ lm_status lm_vulkan_dot_i8_dp4(const char *spv_path, uint32_t device_index,
 lm_status lm_vulkan_dot_f32(const char *spv_path, uint32_t device_index,
                             const float *a, const float *b,
                             uint32_t count, float *out_result);
+lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
+                             const void *packed_q4_k, uint32_t blocks,
+                             const float *input, float *out_result);
 
 
 typedef struct lm_kv_cache lm_kv_cache;
@@ -298,6 +305,8 @@ lm_status lm_cpu_dot_q4_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
 lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
+lm_status lm_cpu_dot_q4_k(const lm_tensor *weights, const float *input,
+                          uint64_t elements, float *out);
 
 typedef struct lm_cpu_decoder lm_cpu_decoder;
 
@@ -338,11 +347,34 @@ typedef struct lm_moe_route {
     float weights[16];
 } lm_moe_route;
 
+typedef enum lm_moe_tensor_role {
+    LM_MOE_TENSOR_GATE_UP_EXPERT = 0,
+    LM_MOE_TENSOR_DOWN_EXPERT
+} lm_moe_tensor_role;
+
+typedef struct lm_moe_tensor_mapping {
+    lm_moe_tensor_role role;
+    uint32_t layer_index;
+    uint32_t expert_axis;
+    uint32_t expert_count;
+    uint32_t rank;
+    uint64_t dims[8];
+} lm_moe_tensor_mapping;
+
+lm_status lm_moe_map_mixtral_tensor(const lm_model_tensor_info *descriptor,
+                                    uint32_t expected_experts,
+                                    lm_moe_tensor_mapping *out_mapping);
+
 lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
                            uint32_t experts_per_token, lm_moe_route_policy policy,
                            lm_moe_route *out_route);
 lm_status lm_cpu_moe_combine(const lm_moe_route *route, const float *selected_outputs,
                               uint32_t hidden_size, float *out_hidden);
+lm_status lm_cpu_moe_selected_expert_mlp(const lm_moe_route *route,
+                                         const lm_tensor *gate_up_weights,
+                                         const lm_tensor *down_weights,
+                                         uint32_t hidden_size, uint32_t intermediate_size,
+                                         const float *input, float *selected_outputs);
 
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);
