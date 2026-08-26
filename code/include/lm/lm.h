@@ -233,6 +233,8 @@ typedef struct lm_model_info {
     uint64_t file_bytes;
     uint64_t header_bytes;
     uint64_t tensor_count;
+    uint32_t expert_count;
+    uint32_t experts_per_token;
 } lm_model_info;
 
 lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity);

@@ -139,6 +139,17 @@ bool read_gguf_alignment(BinaryReader &reader, uint32_t type, uint64_t *alignmen
     return false;
 }
 
+bool has_suffix(const std::string &value, const char *suffix) {
+    const size_t suffix_size = std::strlen(suffix);
+    return value.size() >= suffix_size && value.compare(value.size() - suffix_size, suffix_size, suffix) == 0;
+}
+
+bool read_moe_count(BinaryReader &reader, uint32_t type, uint64_t *count) {
+    if (type == 4u) { uint32_t value = 0u; if (!reader.u32(&value)) return false; *count = value; return true; }
+    if (type == 10u) return reader.u64(count);
+    return false;
+}
+
 lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_text, size_t error_capacity) {
     BinaryReader reader(path);
     if (!reader.good()) { set_error(error_text, error_capacity, "cannot open model file"); return LM_ERR_IO; }
@@ -156,6 +167,10 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
         set_error(error_text, error_capacity, "GGUF item count exceeds safety limit"); return LM_ERR_CAPACITY;
     }
     uint64_t alignment = 32u;
+    uint64_t expert_count = 0u;
+    uint64_t experts_per_token = 0u;
+    bool has_expert_count = false;
+    bool has_experts_per_token = false;
     for (uint64_t i = 0u; i < metadata_count; ++i) {
         std::string key;
         uint32_t type = 0u;
@@ -170,10 +185,26 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
             if (alignment == 0u || alignment > (1ull << 20u) || (alignment % 8u) != 0u) {
                 set_error(error_text, error_capacity, "GGUF alignment must be a bounded multiple of 8"); return LM_ERR_PARSE;
             }
+        } else if (has_suffix(key, ".expert_count")) {
+            if (!read_moe_count(reader, type, &expert_count)) {
+                set_error(error_text, error_capacity, "invalid GGUF expert count metadata"); return LM_ERR_PARSE;
+            }
+            has_expert_count = true;
+        } else if (has_suffix(key, ".expert_used_count")) {
+            if (!read_moe_count(reader, type, &experts_per_token)) {
+                set_error(error_text, error_capacity, "invalid GGUF experts-per-token metadata"); return LM_ERR_PARSE;
+            }
+            has_experts_per_token = true;
         } else if (!skip_gguf_value(reader, type, 0u)) {
             set_error(error_text, error_capacity, "invalid GGUF metadata value"); return LM_ERR_PARSE;
         }
         if (key != "general.alignment") alignment = old_alignment;
+    }
+    if ((has_expert_count != has_experts_per_token) || expert_count == 0u || experts_per_token == 0u ||
+        expert_count > UINT32_MAX || experts_per_token > UINT32_MAX || experts_per_token > expert_count) {
+        if (has_expert_count || has_experts_per_token) {
+            set_error(error_text, error_capacity, "invalid GGUF MoE expert metadata"); return LM_ERR_PARSE;
+        }
     }
     std::vector<uint64_t> relative_offsets;
     relative_offsets.reserve(static_cast<size_t>(tensor_count));
@@ -217,6 +248,8 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
     out_info->file_bytes = reader.size();
     out_info->header_bytes = tensor_data_start;
     out_info->tensor_count = tensor_count;
+    out_info->expert_count = has_expert_count ? static_cast<uint32_t>(expert_count) : 0u;
+    out_info->experts_per_token = has_experts_per_token ? static_cast<uint32_t>(experts_per_token) : 0u;
     return LM_OK;
 }
 

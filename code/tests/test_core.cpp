@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <vector>
 
 struct ProbeState { unsigned count; uint32_t last_stage; };
 
@@ -163,6 +164,32 @@ static void test_model_and_cpu_math() {
     assert(lm_model_tensor_span(model, info.file_bytes - info.header_bytes + 1u, 1u, &tensor_span) == LM_ERR_RANGE);
     lm_model_close(model);
     std::remove(gguf);
+
+    const char *moe_path = "test-moe.gguf";
+    std::vector<unsigned char> moe(24u, 0u);
+    moe[0] = 'G'; moe[1] = 'G'; moe[2] = 'U'; moe[3] = 'F';
+    moe[4] = 3u;
+    moe[16] = 2u;
+    auto put_u32 = [&moe](uint32_t value) {
+        for (unsigned i = 0u; i < 4u; ++i) moe.push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    auto put_u64 = [&moe](uint64_t value) {
+        for (unsigned i = 0u; i < 8u; ++i) moe.push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    auto put_key = [&moe, &put_u32, &put_u64](const char *key, uint32_t value) {
+        const size_t length = std::strlen(key);
+        put_u64(length);
+        for (size_t i = 0u; i < length; ++i) moe.push_back(static_cast<unsigned char>(key[i]));
+        put_u32(4u);
+        put_u32(value);
+    };
+    put_key("llama.expert_count", 8u);
+    put_key("llama.expert_used_count", 2u);
+    moe.resize((moe.size() + 31u) & ~static_cast<size_t>(31u), 0u);
+    { std::ofstream file(moe_path, std::ios::binary); file.write(reinterpret_cast<const char *>(moe.data()), static_cast<std::streamsize>(moe.size())); }
+    assert(lm_model_inspect(moe_path, &info, error, sizeof(error)) == LM_OK);
+    assert(info.expert_count == 8u && info.experts_per_token == 2u);
+    std::remove(moe_path);
 
     const float a[] = {1.0f, 2.0f, 3.0f};
     const float b[] = {4.0f, 5.0f, 6.0f};
