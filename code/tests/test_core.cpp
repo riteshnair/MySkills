@@ -532,6 +532,13 @@ static void test_kernel_selection() {
     assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_DP4, &dp4, &choice) == LM_ERR_UNSUPPORTED);
     assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_SCALAR, &dp4, &choice) == LM_OK);
     assert(choice.path == LM_KERNEL_VULKAN_SCALAR);
+    assert(lm_kernel_select(LM_KERNEL_DOT_Q4_K, LM_KERNEL_AUTO, &dp4, &choice) == LM_OK);
+    assert(choice.path == LM_KERNEL_VULKAN_SCALAR && std::strcmp(choice.source_id, "vulkan/q4_k") == 0);
+    assert(lm_kernel_contract_get(&choice, &contract) == LM_OK);
+    assert(contract.input_dtype == LM_DTYPE_U8 && contract.output_dtype == LM_DTYPE_F32 &&
+           contract.minimum_alignment == 1u && contract.deterministic == 1u);
+    assert(lm_kernel_select(LM_KERNEL_DOT_Q4_K, LM_KERNEL_AUTO, &cpu, &choice) == LM_OK);
+    assert(choice.path == LM_KERNEL_CPU_SCALAR && std::strcmp(choice.source_id, "cpu/reference") == 0);
 }
 
 static void test_vulkan_dp4() {
@@ -573,6 +580,12 @@ static void test_vulkan_dp4() {
     gpu_result = 0;
     assert(lm_vulkan_dispatch(&dp4_choice, "dot_i8_dp4.comp.spv", 0u, &dp4_io) == LM_OK);
     assert(gpu_result == 70);
+    lm_kernel_choice q4_k_choice{};
+    assert(lm_kernel_select(LM_KERNEL_DOT_Q4_K, LM_KERNEL_VULKAN_SCALAR, &caps, &q4_k_choice) == LM_OK);
+    lm_kernel_io q4_k_io{q4_k_bytes, q4_k_input, 1u, &q4_k_gpu_result};
+    q4_k_gpu_result = 0.0f;
+    assert(lm_vulkan_dispatch(&q4_k_choice, "dot_q4_k_f32.comp.spv", 0u, &q4_k_io) == LM_OK);
+    assert(q4_k_gpu_result == 256.0f);
 }
 
 static void test_probe_and_runtime() {

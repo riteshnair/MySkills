@@ -16,5 +16,9 @@ lm_status lm_vulkan_dispatch(const lm_kernel_choice *choice, const char *shader_
                                     static_cast<const uint32_t *>(io->input0),
                                     static_cast<const uint32_t *>(io->input1), io->count,
                                     static_cast<int32_t *>(io->output));
+    if (choice->path == LM_KERNEL_VULKAN_SCALAR && choice->op == LM_KERNEL_DOT_Q4_K)
+        return lm_vulkan_dot_q4_k(shader_path, device_index, io->input0, io->count,
+                                  static_cast<const float *>(io->input1),
+                                  static_cast<float *>(io->output));
     return LM_ERR_UNSUPPORTED;
 }
