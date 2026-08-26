@@ -13,12 +13,13 @@ The backend is intentionally narrow and replaceable. The portable core selects a
 | Scalar F32 dot shader | Implemented in `shaders/dot_f32_scalar.comp` |
 | SPIR-V build target | Implemented when `glslangValidator` is available |
 | CPU/Vulkan differential fixture | Implemented for scalar F32 dot and packed-int8 DP4 |
+| Contract-based operation dispatch | Implemented for scalar F32 and packed-int8 DP4 |
 | Cooperative matrices | Explicitly excluded |
-| Full tensor graph dispatch | Not yet implemented |
+| Full tensor graph dispatch | Not yet implemented; current dispatch is operation-level only |
 
 ## Replacing a shader
 
-A shader variant must preserve the operation contract and update only the registry/source identifier, specialization metadata, or backend implementation. It must declare its buffer bindings, push constants, element packing, alignment, dispatch shape, required device features, numerical tolerance, and fallback path. The CPU reference test remains mandatory.
+A shader variant must preserve the operation contract and update only the registry/source identifier, specialization metadata, or backend implementation. `lm_vulkan_dispatch` is the narrow operation-level boundary that consumes the selected choice and delegates to the replaceable backend entry point. It must declare its buffer bindings, push constants, element packing, alignment, dispatch shape, required device features, numerical tolerance, and fallback path. The CPU reference test remains mandatory.
 
 The selection order for `LM_KERNEL_AUTO` is:
 

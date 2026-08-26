@@ -191,10 +191,19 @@ typedef struct lm_kernel_contract {
     const char *source_id;
 } lm_kernel_contract;
 
+typedef struct lm_kernel_io {
+    const void *input0;
+    const void *input1;
+    uint32_t count;
+    void *output;
+} lm_kernel_io;
+
 lm_status lm_kernel_contract_get(const lm_kernel_choice *choice, lm_kernel_contract *out_contract);
 lm_status lm_kernel_select(lm_kernel_op op, lm_kernel_path requested,
                            const lm_kernel_caps *caps, lm_kernel_choice *out_choice);
 const char *lm_kernel_path_name(lm_kernel_path path);
+lm_status lm_vulkan_dispatch(const lm_kernel_choice *choice, const char *shader_path,
+                             uint32_t device_index, const lm_kernel_io *io);
 
 typedef struct lm_vulkan_device_info {
     char name[128];

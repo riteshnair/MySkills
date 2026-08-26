@@ -382,6 +382,19 @@ static void test_vulkan_dp4() {
     float scalar_result = 0.0f;
     assert(lm_vulkan_dot_f32("dot_f32_scalar.comp.spv", 0u, scalar_a, scalar_b, 4u, &scalar_result) == LM_OK);
     assert(scalar_result == 70.0f);
+    lm_kernel_caps caps{1u, 1u, 1u};
+    lm_kernel_choice scalar_choice{};
+    assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_SCALAR, &caps, &scalar_choice) == LM_OK);
+    lm_kernel_io scalar_io{scalar_a, scalar_b, 4u, &scalar_result};
+    scalar_result = 0.0f;
+    assert(lm_vulkan_dispatch(&scalar_choice, "dot_f32_scalar.comp.spv", 0u, &scalar_io) == LM_OK);
+    assert(scalar_result == 70.0f);
+    lm_kernel_choice dp4_choice{};
+    assert(lm_kernel_select(LM_KERNEL_DOT_I8, LM_KERNEL_VULKAN_DP4, &caps, &dp4_choice) == LM_OK);
+    lm_kernel_io dp4_io{a, b, 1u, &gpu_result};
+    gpu_result = 0;
+    assert(lm_vulkan_dispatch(&dp4_choice, "dot_i8_dp4.comp.spv", 0u, &dp4_io) == LM_OK);
+    assert(gpu_result == 70);
 }
 
 static void test_probe_and_runtime() {
