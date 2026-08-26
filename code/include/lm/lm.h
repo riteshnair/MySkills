@@ -237,9 +237,18 @@ typedef struct lm_model_info {
     uint32_t experts_per_token;
 } lm_model_info;
 
+typedef struct lm_model_tensor_info {
+    char name[65];
+    uint32_t rank;
+    uint64_t dims[8];
+    uint32_t type;
+    uint64_t relative_offset;
+} lm_model_tensor_info;
+
 lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity);
 void lm_model_close(lm_model_file *model);
 lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info);
+lm_status lm_model_tensor_info_at(const lm_model_file *model, uint64_t index, lm_model_tensor_info *out_info);
 lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_offset, uint64_t bytes, lm_file_span *out_span);
 
 

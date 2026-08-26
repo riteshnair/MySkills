@@ -13,6 +13,7 @@
 struct lm_model_file {
     lm_file *file;
     lm_model_info info;
+    std::vector<lm_model_tensor_info> tensors;
 };
 
 namespace {
@@ -150,7 +151,8 @@ bool read_moe_count(BinaryReader &reader, uint32_t type, uint64_t *count) {
     return false;
 }
 
-lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_text, size_t error_capacity) {
+lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_text, size_t error_capacity,
+                       std::vector<lm_model_tensor_info> *out_tensors = nullptr) {
     BinaryReader reader(path);
     if (!reader.good()) { set_error(error_text, error_capacity, "cannot open model file"); return LM_ERR_IO; }
     if (reader.size() < 24u) { set_error(error_text, error_capacity, "GGUF header is truncated"); return LM_ERR_PARSE; }
@@ -214,11 +216,15 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
         if (!reader.string(&name, 64u) || name.empty() || !reader.u32(&dimensions) || dimensions > 8u) {
             set_error(error_text, error_capacity, "invalid GGUF tensor descriptor"); return LM_ERR_PARSE;
         }
+        lm_model_tensor_info tensor_info{};
+        std::strncpy(tensor_info.name, name.c_str(), sizeof(tensor_info.name) - 1u);
+        tensor_info.rank = dimensions;
         for (uint32_t d = 0u; d < dimensions; ++d) {
             uint64_t dimension = 0u;
             if (!reader.u64(&dimension) || dimension == 0u) {
                 set_error(error_text, error_capacity, "invalid GGUF tensor dimension"); return LM_ERR_PARSE;
             }
+            tensor_info.dims[d] = dimension;
         }
         uint32_t tensor_type = 0u;
         uint64_t offset = 0u;
@@ -228,6 +234,9 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
         if ((offset % alignment) != 0u) {
             set_error(error_text, error_capacity, "GGUF tensor offset is not aligned"); return LM_ERR_PARSE;
         }
+        tensor_info.type = tensor_type;
+        tensor_info.relative_offset = offset;
+        if (out_tensors) out_tensors->push_back(tensor_info);
         relative_offsets.push_back(offset);
     }
     const uint64_t tensor_data_start = align_up(reader.position(), alignment);
@@ -461,10 +470,15 @@ lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error
     const lm_status inspected = lm_model_inspect(path, &info, error_text, error_capacity);
     if (inspected != LM_OK) return inspected;
     lm_file *file = nullptr;
+    std::vector<lm_model_tensor_info> tensors;
+    if (info.format == LM_MODEL_GGUF) {
+        const lm_status descriptors = inspect_gguf(path, &info, error_text, error_capacity, &tensors);
+        if (descriptors != LM_OK) return descriptors;
+    }
     const lm_status opened = lm_file_open(path, &file);
     if (opened != LM_OK) return opened;
     try {
-        lm_model_file *model = new lm_model_file{file, info};
+        lm_model_file *model = new lm_model_file{file, info, std::move(tensors)};
         *out_model = model;
         return LM_OK;
     } catch (const std::bad_alloc &) {
@@ -482,6 +496,13 @@ void lm_model_close(lm_model_file *model) {
 lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info) {
     if (!model || !out_info) return LM_ERR_ARGUMENT;
     *out_info = model->info;
+    return LM_OK;
+}
+
+lm_status lm_model_tensor_info_at(const lm_model_file *model, uint64_t index, lm_model_tensor_info *out_info) {
+    if (!model || !out_info) return LM_ERR_ARGUMENT;
+    if (index >= model->tensors.size()) return LM_ERR_RANGE;
+    *out_info = model->tensors[static_cast<size_t>(index)];
     return LM_OK;
 }
 

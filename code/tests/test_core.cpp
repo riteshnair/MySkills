@@ -156,6 +156,10 @@ static void test_model_and_cpu_math() {
     assert(lm_model_open(gguf, &model, error, sizeof(error)) == LM_OK);
     lm_model_info opened_info{};
     assert(lm_model_get_info(model, &opened_info) == LM_OK && opened_info.header_bytes == info.header_bytes);
+    lm_model_tensor_info descriptor{};
+    assert(lm_model_tensor_info_at(model, 0u, &descriptor) == LM_OK);
+    assert(std::strcmp(descriptor.name, "x") == 0 && descriptor.rank == 1u && descriptor.dims[0] == 1u && descriptor.type == 0u && descriptor.relative_offset == 0u);
+    assert(lm_model_tensor_info_at(model, 1u, &descriptor) == LM_ERR_RANGE);
     lm_file_span tensor_span{};
     assert(lm_model_tensor_span(model, 0u, 4u, &tensor_span) == LM_OK);
     unsigned char tensor_bytes[4] = {1u, 1u, 1u, 1u};
