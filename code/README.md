@@ -4,9 +4,9 @@ This directory contains the first buildable vertical slice of the CPU-first, Vul
 
 ## Current slice
 
-The current slice provides a strict C99-compatible public ABI, C++17 orchestration, CLI configuration, capability-driven CPU fallback selection, compact probe delivery, bounded GGUF/SafeTensors structural inspection, scalar dot-product and softmax reference primitives, a paged KV-cache control plane with fork/rollback/release semantics, Vulkan device discovery, and a real packed-int8 DP4 compute dispatch with CPU differential testing.
+The current slice provides a strict C99-compatible public ABI, C++17 orchestration, CLI configuration, compact probe delivery, bounded GGUF/SafeTensors metadata inspection, scalar math, tensor and host-buffer primitives, on-demand file reads, a paged KV-cache control plane, a narrow scalar decoder fixture, Vulkan device discovery, and a real packed-int8 DP4 compute dispatch with CPU differential testing.
 
-It intentionally does **not** claim to run full transformer inference. The Vulkan backend currently proves device discovery and one DP4 kernel path; it is not yet a transformer graph executor. Unsupported accelerator requests return `LM_ERR_UNSUPPORTED` instead of silently pretending to work. The next slice should add tensor storage/views, one complete small decoder model on scalar CPU, and stronger GGUF/SafeTensors tensor metadata parsing.
+It intentionally does **not** claim broad transformer compatibility. The scalar path now includes one deliberately narrow single-layer/single-head decoder fixture with golden outputs. The Vulkan backend currently proves device discovery and one DP4 kernel path; it is not yet a transformer graph executor. Unsupported accelerator requests return `LM_ERR_UNSUPPORTED` instead of silently pretending to work. The next slice should connect model descriptors to tensor spans and expand the decoder contract without sacrificing the CPU oracle.
 
 ## Build
 
@@ -39,6 +39,9 @@ Use `--help` for the supported switches. Use a requested accelerator such as `--
 | `core/lm.cpp` | Configuration, backend selection, runtime and probes |
 | `core/model.cpp` | Bounded model inspection and scalar CPU primitives |
 | `core/kv.cpp` | Paged KV-cache control plane |
+| `core/file.cpp` | Bounded read-only on-demand file access |
+| `core/tensor.cpp` | Dtype, tensor-view, and host-buffer primitives |
+| `core/decoder.cpp` | Narrow scalar CPU decoder fixture |
 | `core/kernel.cpp` | Replaceable CPU/Vulkan/DP4 kernel registry |
 | `vulkan/device.cpp` | Vulkan device discovery |
 | `vulkan/dp4.cpp` | Reference packed-int8 DP4 dispatch |

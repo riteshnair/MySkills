@@ -164,6 +164,45 @@ static void test_safetensors_parser() {
     std::remove(bad_path);
 }
 
+static void test_cpu_decoder() {
+    const float embedding[] = {1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
+    const float gamma[] = {1.0f, 1.0f};
+    const float identity[] = {1.0f, 0.0f, 0.0f, 1.0f};
+    const float zeros[] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const float output[] = {1.0f, 0.0f, 2.0f, 0.0f, 1.0f, 3.0f};
+    lm_cpu_decoder_config config{};
+    config.vocab_size = 3u;
+    config.hidden_size = 2u;
+    config.max_context = 2u;
+    config.rms_epsilon = 1.0e-5f;
+    config.rope_theta = 10000.0f;
+    config.use_rope = 0u;
+    config.embedding = embedding;
+    config.rms_gamma_1 = gamma;
+    config.wq = identity;
+    config.wk = identity;
+    config.wv = identity;
+    config.wo = zeros;
+    config.rms_gamma_2 = gamma;
+    config.w1 = zeros;
+    config.w2 = zeros;
+    config.wout = output;
+    lm_cpu_decoder *decoder = nullptr;
+    assert(lm_cpu_decoder_create(&config, &decoder) == LM_OK);
+    float logits[3] = {};
+    assert(lm_cpu_decoder_step(decoder, 0u, logits, 3u) == LM_OK);
+    assert(logits[0] == 1.0f && logits[1] == 0.0f && logits[2] == 2.0f);
+    assert(lm_cpu_decoder_position(decoder) == 1u);
+    assert(lm_cpu_decoder_step(decoder, 1u, logits, 3u) == LM_OK);
+    assert(logits[0] == 0.0f && logits[1] == 1.0f && logits[2] == 3.0f);
+    assert(lm_cpu_decoder_step(decoder, 0u, logits, 3u) == LM_ERR_CAPACITY);
+    assert(lm_cpu_decoder_step(decoder, 3u, logits, 3u) == LM_ERR_RANGE);
+    assert(lm_cpu_decoder_reset(decoder) == LM_OK && lm_cpu_decoder_position(decoder) == 0u);
+    assert(lm_cpu_decoder_step(decoder, 0u, logits, 3u) == LM_OK);
+    assert(logits[0] == 1.0f && logits[1] == 0.0f && logits[2] == 2.0f);
+    lm_cpu_decoder_destroy(decoder);
+}
+
 static void test_kv_pages() {
     lm_kv_cache *cache = nullptr;
     assert(lm_kv_cache_create(2u, 4u, &cache) == LM_OK);
@@ -234,6 +273,7 @@ int main() {
     test_file_access();
     test_model_and_cpu_math();
     test_safetensors_parser();
+    test_cpu_decoder();
     test_kv_pages();
     test_kernel_selection();
     test_vulkan_dp4();

@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(lm_core STATIC core/lm.cpp core/model.cpp core/kv.cpp core/kernel.cpp core/tensor.cpp core/file.cpp)
+add_library(lm_core STATIC core/lm.cpp core/model.cpp core/kv.cpp core/kernel.cpp core/tensor.cpp core/file.cpp core/decoder.cpp)
 target_include_directories(lm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(lm_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
 

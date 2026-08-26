@@ -205,6 +205,33 @@ lm_status lm_model_inspect(const char *path, lm_model_info *out_info,
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out);
 lm_status lm_cpu_softmax_f32(const float *input, float *output, size_t count);
 
+typedef struct lm_cpu_decoder lm_cpu_decoder;
+
+typedef struct lm_cpu_decoder_config {
+    uint32_t vocab_size;
+    uint32_t hidden_size;
+    uint32_t max_context;
+    float rms_epsilon;
+    float rope_theta;
+    uint8_t use_rope;
+    const float *embedding; /* vocab_size x hidden_size */
+    const float *rms_gamma_1; /* hidden_size */
+    const float *wq; /* hidden_size x hidden_size */
+    const float *wk; /* hidden_size x hidden_size */
+    const float *wv; /* hidden_size x hidden_size */
+    const float *wo; /* hidden_size x hidden_size */
+    const float *rms_gamma_2; /* hidden_size */
+    const float *w1; /* hidden_size x hidden_size */
+    const float *w2; /* hidden_size x hidden_size */
+    const float *wout; /* hidden_size x vocab_size */
+} lm_cpu_decoder_config;
+
+lm_status lm_cpu_decoder_create(const lm_cpu_decoder_config *config, lm_cpu_decoder **out_decoder);
+void lm_cpu_decoder_destroy(lm_cpu_decoder *decoder);
+lm_status lm_cpu_decoder_reset(lm_cpu_decoder *decoder);
+lm_status lm_cpu_decoder_step(lm_cpu_decoder *decoder, uint32_t token_id, float *out_logits, size_t logits_count);
+uint32_t lm_cpu_decoder_position(const lm_cpu_decoder *decoder);
+
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);
 void lm_kv_cache_destroy(lm_kv_cache *cache);
