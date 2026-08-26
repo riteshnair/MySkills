@@ -335,6 +335,18 @@ private:
     const char *end_;
 };
 
+uint32_t safe_dtype_code(const std::string &dtype) {
+    if (dtype == "F32") return LM_DTYPE_F32;
+    if (dtype == "F16") return LM_DTYPE_F16;
+    if (dtype == "BF16") return LM_DTYPE_BF16;
+    if (dtype == "I8") return LM_DTYPE_I8;
+    if (dtype == "I32") return LM_DTYPE_I32;
+    if (dtype == "U8") return LM_DTYPE_U8;
+    if (dtype == "U4") return 0x100u;
+    if (dtype == "I4") return 0x101u;
+    return 0xffffffffu;
+}
+
 uint64_t safe_dtype_bytes(const std::string &dtype, uint64_t elements, bool *known) {
     uint64_t element_bytes = 0u;
     if (dtype == "BOOL" || dtype == "U8" || dtype == "I8" || dtype == "F8_E4M3" || dtype == "F8_E5M2") element_bytes = 1u;
@@ -350,7 +362,8 @@ uint64_t safe_dtype_bytes(const std::string &dtype, uint64_t elements, bool *kno
     return elements * element_bytes;
 }
 
-lm_status inspect_safetensors(const char *path, lm_model_info *out_info, char *error_text, size_t error_capacity) {
+lm_status inspect_safetensors(const char *path, lm_model_info *out_info, char *error_text, size_t error_capacity,
+                              std::vector<lm_model_tensor_info> *out_tensors = nullptr) {
     BinaryReader reader(path);
     if (!reader.good()) { set_error(error_text, error_capacity, "cannot open model file"); return LM_ERR_IO; }
     if (reader.size() < 8u) { set_error(error_text, error_capacity, "SafeTensors header length is truncated"); return LM_ERR_PARSE; }
@@ -375,6 +388,7 @@ lm_status inspect_safetensors(const char *path, lm_model_info *out_info, char *e
                 if (!json.character('{')) { set_error(error_text, error_capacity, "SafeTensors tensor descriptor is not an object"); return LM_ERR_PARSE; }
                 bool have_dtype = false, have_shape = false, have_offsets = false;
                 std::string dtype;
+                std::vector<uint64_t> shape;
                 uint64_t elements = 1u, begin = 0u, end = 0u;
                 json.whitespace();
                 if (json.position() < header.data() + header.size() && *json.position() != '}') {
@@ -392,6 +406,7 @@ lm_status inspect_safetensors(const char *path, lm_model_info *out_info, char *e
                                     uint64_t dimension = 0u;
                                     if (!json.unsigned_number(&dimension) || (dimension != 0u && elements > std::numeric_limits<uint64_t>::max() / dimension)) { set_error(error_text, error_capacity, "SafeTensors shape overflows"); return LM_ERR_RANGE; }
                                     elements *= dimension;
+                                    shape.push_back(dimension);
                                     json.whitespace(); if (json.position() < header.data() + header.size() && *json.position() == ']') { if (!json.consume(']')) return LM_ERR_PARSE; break; }
                                     if (!json.character(',')) { set_error(error_text, error_capacity, "invalid SafeTensors shape array"); return LM_ERR_PARSE; }
                                 }
@@ -410,6 +425,18 @@ lm_status inspect_safetensors(const char *path, lm_model_info *out_info, char *e
                 const uint64_t expected_bytes = safe_dtype_bytes(dtype, elements, &dtype_known);
                 if (!have_dtype || !have_shape || !have_offsets || !dtype_known) { set_error(error_text, error_capacity, "unsupported or incomplete SafeTensors descriptor"); return LM_ERR_UNSUPPORTED; }
                 if (expected_bytes != end - begin) { set_error(error_text, error_capacity, "SafeTensors descriptor size does not match shape and dtype"); return LM_ERR_PARSE; }
+                if (out_tensors) {
+                    if (shape.size() > 8u || safe_dtype_code(dtype) == 0xffffffffu) {
+                        set_error(error_text, error_capacity, "SafeTensors descriptor cannot be represented"); return LM_ERR_UNSUPPORTED;
+                    }
+                    lm_model_tensor_info tensor_info{};
+                    std::strncpy(tensor_info.name, name.c_str(), sizeof(tensor_info.name) - 1u);
+                    tensor_info.rank = static_cast<uint32_t>(shape.size());
+                    for (size_t d = 0u; d < shape.size(); ++d) tensor_info.dims[d] = shape[d];
+                    tensor_info.type = safe_dtype_code(dtype);
+                    tensor_info.relative_offset = begin;
+                    out_tensors->push_back(tensor_info);
+                }
                 ranges.push_back({begin, end});
                 if (ranges.size() > kMaxContainerItems) { set_error(error_text, error_capacity, "SafeTensors tensor count exceeds safety limit"); return LM_ERR_CAPACITY; }
             }
@@ -473,6 +500,9 @@ lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error
     std::vector<lm_model_tensor_info> tensors;
     if (info.format == LM_MODEL_GGUF) {
         const lm_status descriptors = inspect_gguf(path, &info, error_text, error_capacity, &tensors);
+        if (descriptors != LM_OK) return descriptors;
+    } else if (info.format == LM_MODEL_SAFETENSORS) {
+        const lm_status descriptors = inspect_safetensors(path, &info, error_text, error_capacity, &tensors);
         if (descriptors != LM_OK) return descriptors;
     }
     const lm_status opened = lm_file_open(path, &file);

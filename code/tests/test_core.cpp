@@ -222,6 +222,13 @@ static void test_safetensors_parser() {
     char error[128] = {};
     assert(lm_model_inspect(valid_path, &info, error, sizeof(error)) == LM_OK);
     assert(info.format == LM_MODEL_SAFETENSORS && info.tensor_count == 1u);
+    lm_model_file *model = nullptr;
+    assert(lm_model_open(valid_path, &model, error, sizeof(error)) == LM_OK);
+    lm_model_tensor_info descriptor{};
+    assert(lm_model_tensor_info_at(model, 0u, &descriptor) == LM_OK);
+    assert(std::strcmp(descriptor.name, "x") == 0 && descriptor.rank == 1u && descriptor.dims[0] == 2u && descriptor.type == LM_DTYPE_F32 && descriptor.relative_offset == 0u);
+    assert(lm_model_tensor_info_at(model, 1u, &descriptor) == LM_ERR_RANGE);
+    lm_model_close(model);
     std::remove(valid_path);
 
     const char *bad_path = "bad-fixture.safetensors";
