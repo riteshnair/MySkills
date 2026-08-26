@@ -32,21 +32,24 @@ bool read_spv(const char *path, std::vector<uint32_t> *out) {
 
 } // namespace
 
-lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
-                             const void *packed_q4_k, uint32_t blocks,
-                             const float *input, float *out_result) {
-    if (!spv_path || !packed_q4_k || !input || !out_result || blocks == 0u) return LM_ERR_ARGUMENT;
-    if (blocks > std::numeric_limits<uint64_t>::max() / 144u ||
-        blocks > std::numeric_limits<uint64_t>::max() / 256u)
-        return LM_ERR_RANGE;
-    const uint64_t packed_bytes_64 = static_cast<uint64_t>(blocks) * 144u;
-    const uint64_t input_bytes_64 = static_cast<uint64_t>(blocks) * 256u * sizeof(float);
+lm_status lm_vulkan_matvec_q4_k(const char *spv_path, uint32_t device_index,
+                                const void *packed_q4_k, uint32_t rows,
+                                uint32_t blocks_per_row, const float *input,
+                                float *out) {
+    if (!spv_path || !packed_q4_k || !input || !out || rows == 0u || blocks_per_row == 0u) return LM_ERR_ARGUMENT;
+    const uint64_t row_bytes_64 = static_cast<uint64_t>(blocks_per_row) * 144u;
+    const uint64_t packed_bytes_64 = row_bytes_64 * rows;
+    const uint64_t input_bytes_64 = static_cast<uint64_t>(blocks_per_row) * 256u * sizeof(float);
+    const uint64_t output_bytes_64 = static_cast<uint64_t>(rows) * sizeof(float);
     if (packed_bytes_64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
         input_bytes_64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        output_bytes_64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        packed_bytes_64 > static_cast<uint64_t>(std::numeric_limits<VkDeviceSize>::max()) ||
         input_bytes_64 > static_cast<uint64_t>(std::numeric_limits<VkDeviceSize>::max()))
         return LM_ERR_CAPACITY;
     const size_t packed_bytes = static_cast<size_t>(packed_bytes_64);
     const size_t input_bytes = static_cast<size_t>(input_bytes_64);
+    const size_t output_bytes = static_cast<size_t>(output_bytes_64);
     std::vector<uint32_t> code;
     if (!read_spv(spv_path, &code)) return LM_ERR_IO;
 
@@ -140,9 +143,10 @@ lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
     layout_info.bindingCount = 3u;
     layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &set_layout) != VK_SUCCESS) return fail(LM_ERR_UNSUPPORTED);
+    struct Push { uint32_t rows; uint32_t blocks_per_row; } push_data{rows, blocks_per_row};
     VkPushConstantRange push{};
     push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    push.size = sizeof(uint32_t);
+    push.size = sizeof(push_data);
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1u;
@@ -161,7 +165,7 @@ lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
     compute_info.layout = pipeline_layout;
     if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1u, &compute_info, nullptr, &pipeline) != VK_SUCCESS) return fail(LM_ERR_UNSUPPORTED);
 
-    const VkDeviceSize sizes[3] = {static_cast<VkDeviceSize>(packed_bytes), static_cast<VkDeviceSize>(input_bytes), sizeof(float)};
+    const VkDeviceSize sizes[3] = {static_cast<VkDeviceSize>(packed_bytes), static_cast<VkDeviceSize>(input_bytes), static_cast<VkDeviceSize>(output_bytes)};
     for (uint32_t i = 0u; i < 3u; ++i) {
         VkBufferCreateInfo buffer_info{};
         buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -186,8 +190,8 @@ lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
     if (vkMapMemory(device, memories[1], 0u, sizes[1], 0u, &mapped) != VK_SUCCESS) return fail(LM_ERR_STATE);
     std::memcpy(mapped, input, input_bytes);
     vkUnmapMemory(device, memories[1]);
-    if (vkMapMemory(device, memories[2], 0u, sizeof(float), 0u, &mapped) != VK_SUCCESS) return fail(LM_ERR_STATE);
-    std::memset(mapped, 0, sizeof(float));
+    if (vkMapMemory(device, memories[2], 0u, sizes[2], 0u, &mapped) != VK_SUCCESS) return fail(LM_ERR_STATE);
+    std::memset(mapped, 0, output_bytes);
     vkUnmapMemory(device, memories[2]);
 
     VkDescriptorPoolSize pool_size{};
@@ -234,17 +238,18 @@ lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
     if (vkBeginCommandBuffer(command_buffer, &begin) != VK_SUCCESS) return fail(LM_ERR_STATE);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0u, 1u, &descriptor_set, 0u, nullptr);
-    vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(blocks), &blocks);
-    vkCmdDispatch(command_buffer, 1u, 1u, 1u);
+    vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(push_data), &push_data);
+    vkCmdDispatch(command_buffer, rows, 1u, 1u);
     if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) return fail(LM_ERR_STATE);
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1u;
     submit.pCommandBuffers = &command_buffer;
     if (vkQueueSubmit(queue, 1u, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(queue) != VK_SUCCESS) return fail(LM_ERR_STATE);
-    if (vkMapMemory(device, memories[2], 0u, sizeof(float), 0u, &mapped) != VK_SUCCESS) return fail(LM_ERR_STATE);
-    std::memcpy(out_result, mapped, sizeof(float));
+    if (vkMapMemory(device, memories[2], 0u, sizes[2], 0u, &mapped) != VK_SUCCESS) return fail(LM_ERR_STATE);
+    std::memcpy(out, mapped, output_bytes);
     vkUnmapMemory(device, memories[2]);
     cleanup();
-    return std::isfinite(*out_result) ? LM_OK : LM_ERR_RANGE;
+    for (uint32_t i = 0u; i < rows; ++i) if (!std::isfinite(out[i])) return LM_ERR_RANGE;
+    return LM_OK;
 }

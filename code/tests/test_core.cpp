@@ -608,7 +608,7 @@ static void test_vulkan_dp4() {
     assert(lm_cpu_matvec_q4_k(&matvec_tensor, q4_k_input, 2u, 256u, cpu_matvec) == LM_OK);
     assert(cpu_matvec[0] == 256.0f && cpu_matvec[1] == 512.0f);
     float gpu_matvec[2] = {};
-    assert(lm_vulkan_matvec_q4_k("dot_q4_k_f32.comp.spv", 0u, q4_k_rows, 2u, 1u,
+    assert(lm_vulkan_matvec_q4_k("matvec_q4_k_f32.comp.spv", 0u, q4_k_rows, 2u, 1u,
                                  q4_k_input, gpu_matvec) == LM_OK);
     assert(gpu_matvec[0] == cpu_matvec[0] && gpu_matvec[1] == cpu_matvec[1]);
     const float scalar_a[] = {1.0f, 2.0f, 3.0f, 4.0f};
