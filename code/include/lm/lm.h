@@ -417,6 +417,26 @@ typedef struct lm_decoder_graph_plan {
     uint32_t layer_role_mask[LM_DECODER_PLAN_MAX_LAYERS];
 } lm_decoder_graph_plan;
 
+typedef struct lm_decoder_layer_binding {
+    uint64_t attn_norm;
+    uint64_t attn_q;
+    uint64_t attn_k;
+    uint64_t attn_v;
+    uint64_t attn_output;
+    uint64_t ffn_norm;
+    uint64_t ffn_gate;
+    uint64_t ffn_down;
+    uint64_t ffn_up;
+} lm_decoder_layer_binding;
+
+typedef struct lm_decoder_graph_binding {
+    uint64_t token_embedding;
+    uint64_t output;
+    uint64_t output_norm;
+    uint32_t layer_count;
+    lm_decoder_layer_binding layers[LM_DECODER_PLAN_MAX_LAYERS];
+} lm_decoder_graph_binding;
+
 lm_status lm_moe_map_mixtral_tensor(const lm_model_tensor_info *descriptor,
                                     uint32_t expected_experts,
                                     lm_moe_tensor_mapping *out_mapping);
@@ -425,6 +445,8 @@ lm_status lm_decoder_map_llama_tensor(const lm_model_tensor_info *descriptor,
 lm_status lm_decoder_graph_plan_build(const lm_model_tensor_info *descriptors,
                                       uint64_t descriptor_count,
                                       lm_decoder_graph_plan *out_plan);
+lm_status lm_model_build_llama_graph(const lm_model_file *model,
+                                     lm_decoder_graph_binding *out_binding);
 
 lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
                            uint32_t experts_per_token, lm_moe_route_policy policy,

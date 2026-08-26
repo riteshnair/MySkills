@@ -754,6 +754,52 @@ lm_status lm_model_tensor_binding_dot_q8_0_vulkan(const lm_model_tensor_binding 
     return lm_vulkan_dot_q8_0(spv_path, device_index, packed_scratch, blocks, input, out);
 }
 
+lm_status lm_model_build_llama_graph(const lm_model_file *model,
+                                     lm_decoder_graph_binding *out_binding) {
+    if (!model || !out_binding || model->tensors.empty()) return LM_ERR_ARGUMENT;
+    std::memset(out_binding, 0xff, sizeof(*out_binding));
+    out_binding->layer_count = 0u;
+    uint32_t global_mask = 0u;
+    uint32_t layer_masks[LM_DECODER_PLAN_MAX_LAYERS] = {};
+    for (size_t i = 0u; i < model->tensors.size(); ++i) {
+        lm_decoder_tensor_mapping mapping{};
+        const lm_status mapped = lm_decoder_map_llama_tensor(&model->tensors[i], &mapping);
+        if (mapped != LM_OK) return mapped;
+        const uint64_t index = static_cast<uint64_t>(i);
+        if (mapping.role <= LM_DECODER_TENSOR_OUTPUT_NORM) {
+            const uint32_t bit = 1u << mapping.role;
+            if ((global_mask & bit) != 0u) return LM_ERR_PARSE;
+            global_mask |= bit;
+            if (mapping.role == LM_DECODER_TENSOR_TOKEN_EMBEDDING) out_binding->token_embedding = index;
+            else if (mapping.role == LM_DECODER_TENSOR_OUTPUT) out_binding->output = index;
+            else out_binding->output_norm = index;
+        } else {
+            if (mapping.layer_index >= LM_DECODER_PLAN_MAX_LAYERS) return LM_ERR_CAPACITY;
+            const uint32_t bit = 1u << mapping.role;
+            if ((layer_masks[mapping.layer_index] & bit) != 0u) return LM_ERR_PARSE;
+            layer_masks[mapping.layer_index] |= bit;
+            lm_decoder_layer_binding &layer = out_binding->layers[mapping.layer_index];
+            if (mapping.role == LM_DECODER_TENSOR_ATTN_NORM) layer.attn_norm = index;
+            else if (mapping.role == LM_DECODER_TENSOR_ATTN_Q) layer.attn_q = index;
+            else if (mapping.role == LM_DECODER_TENSOR_ATTN_K) layer.attn_k = index;
+            else if (mapping.role == LM_DECODER_TENSOR_ATTN_V) layer.attn_v = index;
+            else if (mapping.role == LM_DECODER_TENSOR_ATTN_OUTPUT) layer.attn_output = index;
+            else if (mapping.role == LM_DECODER_TENSOR_FFN_NORM) layer.ffn_norm = index;
+            else if (mapping.role == LM_DECODER_TENSOR_FFN_GATE) layer.ffn_gate = index;
+            else if (mapping.role == LM_DECODER_TENSOR_FFN_DOWN) layer.ffn_down = index;
+            else if (mapping.role == LM_DECODER_TENSOR_FFN_UP) layer.ffn_up = index;
+            if (mapping.layer_index + 1u > out_binding->layer_count)
+                out_binding->layer_count = mapping.layer_index + 1u;
+        }
+    }
+    const uint32_t global_required = 7u;
+    const uint32_t layer_required = 0xff8u;
+    if (global_mask != global_required || out_binding->layer_count == 0u) return LM_ERR_UNSUPPORTED;
+    for (uint32_t layer = 0u; layer < out_binding->layer_count; ++layer)
+        if (layer_masks[layer] != layer_required) return LM_ERR_UNSUPPORTED;
+    return LM_OK;
+}
+
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out) {
     if (!a || !b || !out || count == 0u) return LM_ERR_ARGUMENT;
     float sum = 0.0f;

@@ -291,6 +291,33 @@ static void test_native_model_tensor_binding() {
     assert(lm_model_tensor_binding_view(&q4_binding, q4_bytes, sizeof(q4_bytes) - 1u, &q4_tensor) == LM_ERR_CAPACITY);
     lm_model_close(model);
     std::remove(path);
+    const char *graph_path = "test-llama-graph.gguf";
+    const char *graph_names[] = {
+        "token_embd.weight", "output.weight", "output_norm.weight",
+        "blk.0.attn_norm.weight", "blk.0.attn_q.weight", "blk.0.attn_k.weight",
+        "blk.0.attn_v.weight", "blk.0.attn_output.weight", "blk.0.ffn_norm.weight",
+        "blk.0.ffn_gate.weight", "blk.0.ffn_down.weight", "blk.0.ffn_up.weight"};
+    std::vector<unsigned char> graph_gguf(24u, 0u);
+    graph_gguf[0] = 'G'; graph_gguf[1] = 'G'; graph_gguf[2] = 'U'; graph_gguf[3] = 'F';
+    graph_gguf[4] = 3u;
+    graph_gguf[8] = 12u;
+    for (unsigned i = 0u; i < 12u; ++i)
+        put_descriptor(&graph_gguf, graph_names[i], 0u, static_cast<uint64_t>(i) * 32u, 1u);
+    const size_t graph_header = (graph_gguf.size() + 31u) & ~static_cast<size_t>(31u);
+    graph_gguf.resize(graph_header + 356u, 0u);
+    {
+        std::ofstream file(graph_path, std::ios::binary);
+        file.write(reinterpret_cast<const char *>(graph_gguf.data()), static_cast<std::streamsize>(graph_gguf.size()));
+    }
+    lm_model_file *graph_model = nullptr;
+    assert(lm_model_open(graph_path, &graph_model, error, sizeof(error)) == LM_OK);
+    lm_decoder_graph_binding graph_binding{};
+    assert(lm_model_build_llama_graph(graph_model, &graph_binding) == LM_OK);
+    assert(graph_binding.token_embedding == 0u && graph_binding.output == 1u &&
+           graph_binding.output_norm == 2u && graph_binding.layer_count == 1u);
+    assert(graph_binding.layers[0].attn_q == 4u && graph_binding.layers[0].ffn_up == 11u);
+    lm_model_close(graph_model);
+    std::remove(graph_path);
 
     std::vector<unsigned char> malformed(24u, 0u);
     malformed[0] = 'G'; malformed[1] = 'G'; malformed[2] = 'U'; malformed[3] = 'F'; malformed[4] = 3u;
