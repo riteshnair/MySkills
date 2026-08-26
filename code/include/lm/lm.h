@@ -297,6 +297,8 @@ typedef struct lm_moe_route {
 lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
                            uint32_t experts_per_token, lm_moe_route_policy policy,
                            lm_moe_route *out_route);
+lm_status lm_cpu_moe_combine(const lm_moe_route *route, const float *selected_outputs,
+                              uint32_t hidden_size, float *out_hidden);
 
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);

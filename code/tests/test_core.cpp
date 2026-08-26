@@ -256,6 +256,12 @@ static void test_moe_router() {
     lm_moe_route selected_only{};
     assert(lm_cpu_moe_route(logits, 4u, 2u, LM_MOE_SOFTMAX_SELECTED_ONLY, &selected_only) == LM_OK);
     assert(selected_only.weights[0] == 0.5f && selected_only.weights[1] == 0.5f);
+    const float selected_outputs[] = {2.0f, 4.0f, 6.0f, 8.0f};
+    float combined[2] = {};
+    assert(lm_cpu_moe_combine(&selected_only, selected_outputs, 2u, combined) == LM_OK);
+    assert(combined[0] == 4.0f && combined[1] == 6.0f);
+    const float bad_output[] = {2.0f, std::numeric_limits<float>::quiet_NaN(), 6.0f, 8.0f};
+    assert(lm_cpu_moe_combine(&selected_only, bad_output, 2u, combined) == LM_ERR_RANGE);
     const float bad_logits[] = {0.0f, std::numeric_limits<float>::quiet_NaN()};
     assert(lm_cpu_moe_route(bad_logits, 2u, 1u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_ERR_RANGE);
     assert(lm_cpu_moe_route(logits, 4u, 3u, LM_MOE_SOFTMAX_ALL_THEN_TOPK, &route) == LM_OK);

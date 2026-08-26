@@ -58,3 +58,21 @@ lm_status lm_cpu_moe_route(const float *router_logits, uint32_t expert_count,
     for (uint32_t slot = 0u; slot < experts_per_token; ++slot) out_route->weights[slot] /= sum;
     return LM_OK;
 }
+
+lm_status lm_cpu_moe_combine(const lm_moe_route *route, const float *selected_outputs,
+                              uint32_t hidden_size, float *out_hidden) {
+    if (!route || !selected_outputs || !out_hidden || route->expert_count == 0u ||
+        route->experts_per_token == 0u || route->experts_per_token > 16u || hidden_size == 0u)
+        return LM_ERR_ARGUMENT;
+    std::memset(out_hidden, 0, static_cast<size_t>(hidden_size) * sizeof(float));
+    for (uint32_t slot = 0u; slot < route->experts_per_token; ++slot) {
+        if (route->selected[slot] >= route->expert_count || !std::isfinite(route->weights[slot])) return LM_ERR_RANGE;
+        const float *expert_output = selected_outputs + static_cast<size_t>(slot) * hidden_size;
+        for (uint32_t i = 0u; i < hidden_size; ++i) {
+            if (!std::isfinite(expert_output[i])) return LM_ERR_RANGE;
+            out_hidden[i] += route->weights[slot] * expert_output[i];
+        }
+    }
+    for (uint32_t i = 0u; i < hidden_size; ++i) if (!std::isfinite(out_hidden[i])) return LM_ERR_RANGE;
+    return LM_OK;
+}
