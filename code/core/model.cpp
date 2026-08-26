@@ -576,6 +576,34 @@ float half_to_float(uint16_t bits) {
     return result;
 }
 
+lm_status lm_cpu_dot_q4_0(const lm_tensor *weights, const float *input,
+                          uint64_t elements, float *out) {
+    if (!weights || !input || !out || elements == 0u || elements % 32u != 0u ||
+        weights->quant_format != LM_QUANT_GGML_Q4_0 || weights->dtype != LM_DTYPE_U8)
+        return LM_ERR_ARGUMENT;
+    if (lm_tensor_validate(weights) != LM_OK) return LM_ERR_RANGE;
+    const uint64_t required_bytes = (elements / 32u) * 18u;
+    if (required_bytes != weights->bytes) return LM_ERR_CAPACITY;
+    const unsigned char *packed = static_cast<const unsigned char *>(weights->data);
+    float sum = 0.0f;
+    for (uint64_t block = 0u; block < elements / 32u; ++block) {
+        const size_t base = static_cast<size_t>(block * 18u);
+        const uint16_t scale_bits = static_cast<uint16_t>(packed[base]) | static_cast<uint16_t>(packed[base + 1u] << 8u);
+        const float scale = half_to_float(scale_bits);
+        if (!std::isfinite(scale)) return LM_ERR_RANGE;
+        for (uint32_t i = 0u; i < 32u; ++i) {
+            const float value = input[block * 32u + i];
+            if (!std::isfinite(value)) return LM_ERR_RANGE;
+            const unsigned char packed_pair = packed[base + 2u + i / 2u];
+            const int quantized = static_cast<int>((i & 1u) == 0u ? (packed_pair & 0x0fu) : (packed_pair >> 4u)) - 8;
+            sum += scale * static_cast<float>(quantized) * value;
+        }
+    }
+    if (!std::isfinite(sum)) return LM_ERR_RANGE;
+    *out = sum;
+    return LM_OK;
+}
+
 lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out) {
     if (!weights || !input || !out || elements == 0u || elements % 32u != 0u ||

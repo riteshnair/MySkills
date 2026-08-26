@@ -112,6 +112,16 @@ static void test_tensor_and_buffer() {
     assert(lm_cpu_dot_q8_0(&q8_weights, q8_input, 32u, &q8_result) == LM_OK);
     assert(q8_result == 528.0f);
     assert(lm_tensor_make_q8_0_view(q8_bytes, 33u, 1u, quant_dims, &q8_weights) == LM_ERR_CAPACITY);
+    unsigned char q4_bytes[18] = {};
+    q4_bytes[0] = 0x00u;
+    q4_bytes[1] = 0x3cu;
+    for (unsigned i = 0u; i < 16u; ++i) q4_bytes[2u + i] = 0x99u;
+    lm_tensor q4_weights{};
+    assert(lm_tensor_make_q4_0_view(q4_bytes, sizeof(q4_bytes), 1u, quant_dims, &q4_weights) == LM_OK);
+    float q4_result = 0.0f;
+    assert(lm_cpu_dot_q4_0(&q4_weights, q8_input, 32u, &q4_result) == LM_OK);
+    assert(q4_result == 32.0f);
+    assert(lm_tensor_make_q4_0_view(q4_bytes, 17u, 1u, quant_dims, &q4_weights) == LM_ERR_CAPACITY);
     lm_buffer_free(buffer);
 }
 

@@ -119,6 +119,7 @@ typedef enum lm_dtype {
 typedef enum lm_quant_format {
     LM_QUANT_NONE = 0,
     LM_QUANT_BLOCK_STORAGE,
+    LM_QUANT_GGML_Q4_0,
     LM_QUANT_GGML_Q8_0
 } lm_quant_format;
 
@@ -145,6 +146,9 @@ lm_status lm_tensor_make_quant_view(void *data, uint64_t bytes,
                                     uint32_t elements_per_block,
                                     uint32_t bytes_per_block,
                                     lm_tensor *out_tensor);
+lm_status lm_tensor_make_q4_0_view(void *data, uint64_t bytes,
+                                   uint32_t rank, const uint32_t *dims,
+                                   lm_tensor *out_tensor);
 lm_status lm_tensor_make_q8_0_view(void *data, uint64_t bytes,
                                    uint32_t rank, const uint32_t *dims,
                                    lm_tensor *out_tensor);
@@ -269,6 +273,8 @@ lm_status lm_model_inspect(const char *path, lm_model_info *out_info,
                            char *error_text, size_t error_capacity);
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out);
 lm_status lm_cpu_softmax_f32(const float *input, float *output, size_t count);
+lm_status lm_cpu_dot_q4_0(const lm_tensor *weights, const float *input,
+                          uint64_t elements, float *out);
 lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
 
