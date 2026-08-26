@@ -6,6 +6,8 @@
 
 For the complete engine architecture, module contracts, backend and memory policies, GGUF/SafeTensors boundaries, lazy loading, KV-cache design, CLI/API usage, probe-bus tracing, validation gates, and human/AI contribution workflow, start with [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md). This is the integrated source-of-truth guide that goes with the skill sources.
 
+The implementation directory contains a self-contained, curated copy of the skills used for the engine: [`code/skills/README.md`](code/skills/README.md). It is intended for contributors and coding agents working directly in the code tree; it uses the same conditional-loading and quality rules as the root suite.
+
 The repository is designed for **progressive disclosure**. Skill metadata is used for routing; a skill body is loaded only when its trigger matches the active task; detailed procedures and version matrices live in on-demand references. This keeps unrelated domain knowledge out of context and reduces token consumption.
 
 ## Design principles
