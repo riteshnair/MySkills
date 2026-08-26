@@ -44,6 +44,35 @@ uint64_t align_up(uint64_t value, uint64_t alignment) {
     return remainder == 0u ? value : value + (alignment - remainder);
 }
 
+lm_status native_contract(const lm_model_tensor_info &descriptor, lm_quant_format *format,
+                         uint32_t *elements_per_block, uint32_t *bytes_per_block,
+                         uint64_t *elements, uint64_t *bytes) {
+    if (!format || !elements_per_block || !bytes_per_block || !elements || !bytes) return LM_ERR_ARGUMENT;
+    if (descriptor.type == 2u) {
+        *format = LM_QUANT_GGML_Q4_0;
+        *elements_per_block = 32u;
+        *bytes_per_block = 18u;
+    } else if (descriptor.type == 8u) {
+        *format = LM_QUANT_GGML_Q8_0;
+        *elements_per_block = 32u;
+        *bytes_per_block = 34u;
+    } else {
+        return LM_ERR_UNSUPPORTED;
+    }
+    if (descriptor.rank == 0u || descriptor.rank > 8u) return LM_ERR_PARSE;
+    uint64_t count = 1u;
+    for (uint32_t i = 0u; i < descriptor.rank; ++i) {
+        if (descriptor.dims[i] == 0u || count > std::numeric_limits<uint64_t>::max() / descriptor.dims[i]) return LM_ERR_RANGE;
+        count *= descriptor.dims[i];
+    }
+    if (count % *elements_per_block != 0u) return LM_ERR_PARSE;
+    const uint64_t blocks = count / *elements_per_block;
+    if (blocks > std::numeric_limits<uint64_t>::max() / *bytes_per_block) return LM_ERR_RANGE;
+    *elements = count;
+    *bytes = blocks * *bytes_per_block;
+    return LM_OK;
+}
+
 class BinaryReader {
 public:
     explicit BinaryReader(const char *path) : stream_(path, std::ios::binary), position_(0u), size_(0u) {
@@ -210,6 +239,8 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
     }
     std::vector<uint64_t> relative_offsets;
     relative_offsets.reserve(static_cast<size_t>(tensor_count));
+    std::vector<lm_model_tensor_info> parsed_tensors;
+    parsed_tensors.reserve(static_cast<size_t>(tensor_count));
     for (uint64_t i = 0u; i < tensor_count; ++i) {
         std::string name;
         uint32_t dimensions = 0u;
@@ -236,7 +267,7 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
         }
         tensor_info.type = tensor_type;
         tensor_info.relative_offset = offset;
-        if (out_tensors) out_tensors->push_back(tensor_info);
+        parsed_tensors.push_back(tensor_info);
         relative_offsets.push_back(offset);
     }
     const uint64_t tensor_data_start = align_up(reader.position(), alignment);
@@ -244,14 +275,36 @@ lm_status inspect_gguf(const char *path, lm_model_info *out_info, char *error_te
         set_error(error_text, error_capacity, "GGUF tensor-data alignment exceeds file"); return LM_ERR_PARSE;
     }
     std::sort(relative_offsets.begin(), relative_offsets.end());
+    const uint64_t tensor_data_bytes = reader.size() - tensor_data_start;
     for (size_t i = 0u; i < relative_offsets.size(); ++i) {
         if (i > 0u && relative_offsets[i] == relative_offsets[i - 1u]) {
             set_error(error_text, error_capacity, "duplicate GGUF tensor offsets"); return LM_ERR_PARSE;
         }
-        if (relative_offsets[i] > reader.size() - tensor_data_start) {
+        if (relative_offsets[i] > tensor_data_bytes) {
             set_error(error_text, error_capacity, "GGUF tensor offset exceeds file"); return LM_ERR_PARSE;
         }
     }
+    for (const lm_model_tensor_info &tensor : parsed_tensors) {
+        lm_quant_format format = LM_QUANT_NONE;
+        uint32_t elements_per_block = 0u;
+        uint32_t bytes_per_block = 0u;
+        uint64_t elements = 0u;
+        uint64_t expected_bytes = 0u;
+        const lm_status contract = native_contract(tensor, &format, &elements_per_block,
+                                                    &bytes_per_block, &elements, &expected_bytes);
+        if (contract == LM_ERR_UNSUPPORTED) continue;
+        if (contract != LM_OK) {
+            set_error(error_text, error_capacity, "invalid native GGUF tensor shape"); return LM_ERR_PARSE;
+        }
+        uint64_t limit = tensor_data_bytes;
+        for (const uint64_t offset : relative_offsets) {
+            if (offset > tensor.relative_offset) { limit = offset; break; }
+        }
+        if (tensor.relative_offset > limit || expected_bytes > limit - tensor.relative_offset) {
+            set_error(error_text, error_capacity, "native GGUF tensor payload exceeds its bounded range"); return LM_ERR_PARSE;
+        }
+    }
+    if (out_tensors) *out_tensors = std::move(parsed_tensors);
     out_info->format = LM_MODEL_GGUF;
     out_info->version = version;
     out_info->file_bytes = reader.size();
@@ -542,6 +595,63 @@ lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_off
         bytes > model->info.file_bytes - model->info.header_bytes - relative_offset)
         return LM_ERR_RANGE;
     return lm_file_span_make(model->file, model->info.header_bytes + relative_offset, bytes, out_span);
+}
+
+lm_status lm_model_tensor_bind_native(const lm_model_file *model, uint64_t index, lm_model_tensor_binding *out_binding) {
+    if (!model || !out_binding) return LM_ERR_ARGUMENT;
+    if (index >= model->tensors.size()) return LM_ERR_RANGE;
+    const lm_model_tensor_info &descriptor = model->tensors[static_cast<size_t>(index)];
+    lm_quant_format format = LM_QUANT_NONE;
+    uint32_t elements_per_block = 0u;
+    uint32_t bytes_per_block = 0u;
+    uint64_t elements = 0u;
+    uint64_t expected_bytes = 0u;
+    const lm_status contract = native_contract(descriptor, &format, &elements_per_block,
+                                                &bytes_per_block, &elements, &expected_bytes);
+    if (contract != LM_OK) return contract;
+    const uint64_t data_bytes = model->info.file_bytes - model->info.header_bytes;
+    uint64_t limit = data_bytes;
+    for (const lm_model_tensor_info &other : model->tensors) {
+        if (other.relative_offset > descriptor.relative_offset && other.relative_offset < limit)
+            limit = other.relative_offset;
+    }
+    if (descriptor.relative_offset > limit || expected_bytes > limit - descriptor.relative_offset) return LM_ERR_PARSE;
+    lm_file_span span{};
+    const lm_status spanned = lm_model_tensor_span(model, descriptor.relative_offset, expected_bytes, &span);
+    if (spanned != LM_OK) return spanned;
+    std::memset(out_binding, 0, sizeof(*out_binding));
+    out_binding->descriptor = descriptor;
+    out_binding->span = span;
+    out_binding->elements = elements;
+    out_binding->quant_format = format;
+    out_binding->quant_elements_per_block = elements_per_block;
+    out_binding->quant_bytes_per_block = bytes_per_block;
+    return LM_OK;
+}
+
+lm_status lm_model_tensor_binding_view(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor) {
+    if (!binding || !data || !out_tensor) return LM_ERR_ARGUMENT;
+    if (binding->span.bytes != bytes) return LM_ERR_CAPACITY;
+    uint32_t dims[8] = {};
+    if (binding->descriptor.rank == 0u || binding->descriptor.rank > 8u) return LM_ERR_RANGE;
+    for (uint32_t i = 0u; i < binding->descriptor.rank; ++i) {
+        if (binding->descriptor.dims[i] == 0u || binding->descriptor.dims[i] > UINT32_MAX) return LM_ERR_RANGE;
+        dims[i] = static_cast<uint32_t>(binding->descriptor.dims[i]);
+    }
+    if (binding->quant_format == LM_QUANT_GGML_Q4_0)
+        return lm_tensor_make_q4_0_view(data, bytes, binding->descriptor.rank, dims, out_tensor);
+    if (binding->quant_format == LM_QUANT_GGML_Q8_0)
+        return lm_tensor_make_q8_0_view(data, bytes, binding->descriptor.rank, dims, out_tensor);
+    return LM_ERR_UNSUPPORTED;
+}
+
+lm_status lm_model_tensor_binding_read(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor) {
+    if (!binding || !data || !out_tensor) return LM_ERR_ARGUMENT;
+    if (bytes != binding->span.bytes) return LM_ERR_CAPACITY;
+    if (bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) return LM_ERR_RANGE;
+    const lm_status read = lm_file_span_read(&binding->span, 0u, data, static_cast<size_t>(bytes));
+    if (read != LM_OK) return read;
+    return lm_model_tensor_binding_view(binding, data, bytes, out_tensor);
 }
 
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out) {

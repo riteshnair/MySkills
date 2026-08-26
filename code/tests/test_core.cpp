@@ -151,6 +151,86 @@ static void test_file_access() {
     std::remove(path);
 }
 
+static void test_native_model_tensor_binding() {
+    auto put_u32 = [](std::vector<unsigned char> *bytes, uint32_t value) {
+        for (unsigned i = 0u; i < 4u; ++i) bytes->push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    auto put_u64 = [](std::vector<unsigned char> *bytes, uint64_t value) {
+        for (unsigned i = 0u; i < 8u; ++i) bytes->push_back(static_cast<unsigned char>((value >> (8u * i)) & 0xffu));
+    };
+    auto put_descriptor = [&put_u32, &put_u64](std::vector<unsigned char> *bytes, const char *name,
+                                                uint32_t type, uint64_t offset) {
+        const size_t length = std::strlen(name);
+        put_u64(bytes, length);
+        bytes->insert(bytes->end(), name, name + length);
+        put_u32(bytes, 1u);
+        put_u64(bytes, 32u);
+        put_u32(bytes, type);
+        put_u64(bytes, offset);
+    };
+    std::vector<unsigned char> gguf(24u, 0u);
+    gguf[0] = 'G'; gguf[1] = 'G'; gguf[2] = 'U'; gguf[3] = 'F';
+    gguf[4] = 3u;
+    gguf[8] = 2u;
+    put_descriptor(&gguf, "q4", 2u, 0u);
+    put_descriptor(&gguf, "q8", 8u, 32u);
+    const size_t header_size = (gguf.size() + 31u) & ~static_cast<size_t>(31u);
+    gguf.resize(header_size + 32u + 34u, 0u);
+    gguf[header_size] = 0x00u;
+    gguf[header_size + 1u] = 0x3cu;
+    for (unsigned i = 0u; i < 16u; ++i) gguf[header_size + 2u + i] = 0x99u;
+    gguf[header_size + 32u] = 0x00u;
+    gguf[header_size + 33u] = 0x3cu;
+    for (unsigned i = 0u; i < 32u; ++i) gguf[header_size + 34u + i] = static_cast<unsigned char>(i + 1u);
+    const char *path = "test-native-binding.gguf";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char *>(gguf.data()), static_cast<std::streamsize>(gguf.size()));
+    }
+    lm_model_file *model = nullptr;
+    char error[128] = {};
+    assert(lm_model_open(path, &model, error, sizeof(error)) == LM_OK);
+    lm_model_tensor_binding q4_binding{};
+    assert(lm_model_tensor_bind_native(model, 0u, &q4_binding) == LM_OK);
+    assert(q4_binding.elements == 32u && q4_binding.span.bytes == 18u &&
+           q4_binding.quant_format == LM_QUANT_GGML_Q4_0);
+    unsigned char q4_bytes[18] = {};
+    lm_tensor q4_tensor{};
+    assert(lm_model_tensor_binding_read(&q4_binding, q4_bytes, sizeof(q4_bytes), &q4_tensor) == LM_OK);
+    const float input[32] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                             1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                             1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                             1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float result = 0.0f;
+    assert(lm_cpu_dot_q4_0(&q4_tensor, input, 32u, &result) == LM_OK && result == 32.0f);
+    lm_model_tensor_binding q8_binding{};
+    assert(lm_model_tensor_bind_native(model, 1u, &q8_binding) == LM_OK);
+    assert(q8_binding.elements == 32u && q8_binding.span.offset == q4_binding.span.offset + 32u &&
+           q8_binding.span.bytes == 34u && q8_binding.quant_format == LM_QUANT_GGML_Q8_0);
+    unsigned char q8_bytes[34] = {};
+    lm_tensor q8_tensor{};
+    assert(lm_model_tensor_binding_read(&q8_binding, q8_bytes, sizeof(q8_bytes), &q8_tensor) == LM_OK);
+    assert(lm_cpu_dot_q8_0(&q8_tensor, input, 32u, &result) == LM_OK && result == 528.0f);
+    assert(lm_model_tensor_binding_view(&q4_binding, q4_bytes, sizeof(q4_bytes) - 1u, &q4_tensor) == LM_ERR_CAPACITY);
+    lm_model_close(model);
+    std::remove(path);
+
+    std::vector<unsigned char> malformed(24u, 0u);
+    malformed[0] = 'G'; malformed[1] = 'G'; malformed[2] = 'U'; malformed[3] = 'F'; malformed[4] = 3u;
+    malformed[8] = 1u;
+    put_descriptor(&malformed, "short", 2u, 0u);
+    const size_t malformed_header = (malformed.size() + 31u) & ~static_cast<size_t>(31u);
+    malformed.resize(malformed_header + 17u, 0u);
+    const char *bad_path = "test-short-native-binding.gguf";
+    {
+        std::ofstream file(bad_path, std::ios::binary);
+        file.write(reinterpret_cast<const char *>(malformed.data()), static_cast<std::streamsize>(malformed.size()));
+    }
+    lm_model_info info{};
+    assert(lm_model_inspect(bad_path, &info, error, sizeof(error)) == LM_ERR_PARSE);
+    std::remove(bad_path);
+}
+
 static void test_model_and_cpu_math() {
     const char *gguf = "test-fixture.gguf";
     {
@@ -252,6 +332,8 @@ static void test_safetensors_parser() {
     assert(lm_model_tensor_info_at(model, 0u, &descriptor) == LM_OK);
     assert(std::strcmp(descriptor.name, "x") == 0 && descriptor.rank == 1u && descriptor.dims[0] == 2u && descriptor.type == LM_DTYPE_F32 && descriptor.relative_offset == 0u);
     assert(lm_model_tensor_info_at(model, 1u, &descriptor) == LM_ERR_RANGE);
+    lm_model_tensor_binding binding{};
+    assert(lm_model_tensor_bind_native(model, 0u, &binding) == LM_ERR_UNSUPPORTED);
     lm_model_close(model);
     std::remove(valid_path);
 
@@ -421,6 +503,7 @@ int main() {
     test_vulkan_backend_resolution();
     test_tensor_and_buffer();
     test_file_access();
+    test_native_model_tensor_binding();
     test_model_and_cpu_math();
     test_safetensors_parser();
     test_cpu_decoder();

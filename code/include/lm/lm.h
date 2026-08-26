@@ -262,11 +262,23 @@ typedef struct lm_model_tensor_info {
     uint64_t relative_offset;
 } lm_model_tensor_info;
 
+typedef struct lm_model_tensor_binding {
+    lm_model_tensor_info descriptor;
+    lm_file_span span; /* exact native payload; data is not resident here */
+    uint64_t elements;
+    lm_quant_format quant_format;
+    uint32_t quant_elements_per_block;
+    uint32_t quant_bytes_per_block;
+} lm_model_tensor_binding;
+
 lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity);
 void lm_model_close(lm_model_file *model);
 lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info);
 lm_status lm_model_tensor_info_at(const lm_model_file *model, uint64_t index, lm_model_tensor_info *out_info);
 lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_offset, uint64_t bytes, lm_file_span *out_span);
+lm_status lm_model_tensor_bind_native(const lm_model_file *model, uint64_t index, lm_model_tensor_binding *out_binding);
+lm_status lm_model_tensor_binding_view(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor);
+lm_status lm_model_tensor_binding_read(const lm_model_tensor_binding *binding, void *data, uint64_t bytes, lm_tensor *out_tensor);
 
 
 void lm_config_init(lm_config *config);
