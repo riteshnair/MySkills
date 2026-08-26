@@ -508,6 +508,12 @@ lm_status lm_cpu_moe_selected_expert_mlp_q4_k(const lm_moe_route *route,
 
 lm_status lm_kv_cache_create(uint32_t page_count, uint32_t page_tokens,
                              lm_kv_cache **out_cache);
+/* Payload bytes are caller-defined and remain in source encoding; no conversion is performed.
+ * The payload allocation is separate from control-plane metadata and is per page. */
+lm_status lm_kv_cache_create_with_payload(uint32_t page_count, uint32_t page_tokens,
+                                          uint32_t key_bytes_per_token,
+                                          uint32_t value_bytes_per_token,
+                                          lm_kv_cache **out_cache);
 void lm_kv_cache_destroy(lm_kv_cache *cache);
 lm_status lm_kv_cache_append(lm_kv_cache *cache, uint32_t *page_id,
                              uint32_t token_count);
@@ -517,6 +523,13 @@ lm_status lm_kv_cache_rollback(lm_kv_cache *cache, uint32_t page_id,
                                uint32_t token_count);
 lm_status lm_kv_cache_release(lm_kv_cache *cache, uint32_t page_id);
 lm_status lm_kv_cache_get_stats(const lm_kv_cache *cache, lm_kv_stats *out_stats);
+/* Read/write cover already-appended tokens only; writes detach shared pages first. */
+lm_status lm_kv_cache_write_payload(lm_kv_cache *cache, uint32_t page_id,
+                                     uint32_t token_offset, uint32_t token_count,
+                                     const void *keys, const void *values);
+lm_status lm_kv_cache_read_payload(const lm_kv_cache *cache, uint32_t page_id,
+                                    uint32_t token_offset, uint32_t token_count,
+                                    void *keys, void *values);
 
 lm_status lm_runtime_create(const lm_config *config, lm_runtime **out_runtime);
 void lm_runtime_destroy(lm_runtime *runtime);

@@ -711,6 +711,62 @@ static void test_kv_pages() {
     lm_kv_cache_destroy(cache);
 }
 
+static void test_kv_payload() {
+    lm_kv_cache *metadata_only = nullptr;
+    assert(lm_kv_cache_create(1u, 2u, &metadata_only) == LM_OK);
+    uint32_t metadata_page = UINT32_MAX;
+    assert(lm_kv_cache_append(metadata_only, &metadata_page, 1u) == LM_OK);
+    const unsigned char one_key = 1u;
+    const unsigned char one_value = 2u;
+    assert(lm_kv_cache_write_payload(metadata_only, metadata_page, 0u, 1u,
+                                     &one_key, &one_value) == LM_ERR_UNSUPPORTED);
+    lm_kv_cache_destroy(metadata_only);
+
+    lm_kv_cache *cache = nullptr;
+    assert(lm_kv_cache_create_with_payload(2u, 4u, 3u, 2u, &cache) == LM_OK);
+    uint32_t parent = UINT32_MAX;
+    assert(lm_kv_cache_append(cache, &parent, 3u) == LM_OK);
+    const unsigned char parent_keys[9] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u};
+    const unsigned char parent_values[6] = {11u, 12u, 13u, 14u, 15u, 16u};
+    assert(lm_kv_cache_write_payload(cache, parent, 0u, 3u, parent_keys, parent_values) == LM_OK);
+    unsigned char read_keys[9] = {};
+    unsigned char read_values[6] = {};
+    assert(lm_kv_cache_read_payload(cache, parent, 0u, 3u, read_keys, read_values) == LM_OK);
+    assert(std::memcmp(read_keys, parent_keys, sizeof(read_keys)) == 0);
+    assert(std::memcmp(read_values, parent_values, sizeof(read_values)) == 0);
+    assert(lm_kv_cache_read_payload(cache, parent, 3u, 1u, read_keys, read_values) == LM_ERR_RANGE);
+    assert(lm_kv_cache_write_payload(cache, parent, 2u, 2u, parent_keys, parent_values) == LM_ERR_RANGE);
+
+    uint32_t child = UINT32_MAX;
+    assert(lm_kv_cache_fork(cache, parent, &child) == LM_OK);
+    const unsigned char child_key[3] = {90u, 91u, 92u};
+    const unsigned char child_value[2] = {93u, 94u};
+    assert(lm_kv_cache_write_payload(cache, child, 1u, 1u, child_key, child_value) == LM_OK);
+    assert(lm_kv_cache_read_payload(cache, parent, 1u, 1u, read_keys, read_values) == LM_OK);
+    assert(std::memcmp(read_keys, parent_keys + 3u, 3u) == 0);
+    assert(std::memcmp(read_values, parent_values + 2u, 2u) == 0);
+    assert(lm_kv_cache_read_payload(cache, child, 1u, 1u, read_keys, read_values) == LM_OK);
+    assert(std::memcmp(read_keys, child_key, 3u) == 0);
+    assert(std::memcmp(read_values, child_value, 2u) == 0);
+
+    assert(lm_kv_cache_rollback(cache, child, 2u) == LM_OK);
+    assert(lm_kv_cache_read_payload(cache, child, 1u, 1u, read_keys, read_values) == LM_ERR_RANGE);
+    assert(lm_kv_cache_release(cache, parent) == LM_OK);
+    assert(lm_kv_cache_release(cache, child) == LM_OK);
+    uint32_t reused = UINT32_MAX;
+    assert(lm_kv_cache_append(cache, &reused, 1u) == LM_OK);
+    assert(lm_kv_cache_write_payload(cache, reused, 0u, 1u, &one_key, &one_value) == LM_OK);
+    assert(lm_kv_cache_read_payload(cache, reused, 0u, 1u, read_keys, read_values) == LM_OK);
+    assert(read_keys[0] == one_key && read_values[0] == one_value);
+    assert(lm_kv_cache_release(cache, reused) == LM_OK);
+    lm_kv_cache_destroy(cache);
+
+    lm_kv_cache *invalid = nullptr;
+    assert(lm_kv_cache_create_with_payload(1u, 4u, 0u, 2u, &invalid) == LM_ERR_ARGUMENT);
+    assert(lm_kv_cache_create_with_payload(UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                           UINT32_MAX, &invalid) == LM_ERR_CAPACITY);
+}
+
 static void test_kernel_selection() {
     lm_kernel_caps cpu{0u, 0u, 0u};
     lm_kernel_choice choice{};
@@ -864,6 +920,7 @@ int main() {
     test_cpu_decoder();
     test_moe_router();
     test_kv_pages();
+    test_kv_payload();
     test_kernel_selection();
     test_vulkan_dp4();
     test_probe_and_runtime();
