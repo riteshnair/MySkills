@@ -199,7 +199,14 @@ lm_status lm_runtime_create(const lm_config *config, lm_runtime **out_runtime) {
     runtime->config = *config;
     runtime->config.resolved_backend = config->backend == LM_BACKEND_AUTO ? LM_BACKEND_CPU : config->backend;
     runtime->next_trace_id = 1u;
-    if (runtime->config.resolved_backend != LM_BACKEND_CPU) {
+    if (runtime->config.resolved_backend == LM_BACKEND_VULKAN) {
+        uint32_t device_count = 0u;
+        const lm_status discovered = lm_vulkan_device_count(&device_count);
+        if (discovered != LM_OK || device_count == 0u || config->device_index >= device_count) {
+            std::free(runtime);
+            return discovered != LM_OK ? discovered : LM_ERR_UNSUPPORTED;
+        }
+    } else if (runtime->config.resolved_backend != LM_BACKEND_CPU) {
         std::free(runtime);
         return LM_ERR_UNSUPPORTED;
     }

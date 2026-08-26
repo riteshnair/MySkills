@@ -45,7 +45,7 @@ static void test_cli() {
     assert(std::strcmp(config.model_path, "model.gguf") == 0);
 }
 
-static void test_invalid_backend() {
+static void test_vulkan_backend_resolution() {
     char a0[] = "tiny-lm"; char a1[] = "--backend"; char a2[] = "vulkan";
     char *argv[] = {a0,a1,a2};
     lm_config config;
@@ -53,8 +53,15 @@ static void test_invalid_backend() {
     const char *bad = nullptr;
     assert(lm_config_parse_argv(&config, 3, argv, &bad) == LM_OK);
     lm_runtime *runtime = nullptr;
-    assert(lm_runtime_create(&config, &runtime) == LM_ERR_UNSUPPORTED);
-    assert(runtime == nullptr);
+    uint32_t device_count = 0u;
+    const lm_status discovered = lm_vulkan_device_count(&device_count);
+    const lm_status created = lm_runtime_create(&config, &runtime);
+    if (discovered == LM_OK && device_count > 0u) {
+        assert(created == LM_OK && runtime != nullptr);
+        lm_runtime_destroy(runtime);
+    } else {
+        assert(created == LM_ERR_UNSUPPORTED && runtime == nullptr);
+    }
 }
 
 static void test_tensor_and_buffer() {
@@ -272,7 +279,7 @@ static void test_probe_and_runtime() {
 int main() {
     test_defaults();
     test_cli();
-    test_invalid_backend();
+    test_vulkan_backend_resolution();
     test_tensor_and_buffer();
     test_file_access();
     test_model_and_cpu_math();

@@ -29,7 +29,7 @@ Run the control-plane CLI:
   --model fixture.gguf
 ```
 
-Use `--help` for the supported switches. Use a requested accelerator such as `--backend vulkan` to verify the explicit unsupported-backend gate in this slice.
+Use `--help` for the supported switches. `--backend vulkan` now performs capability/device validation and resolves a Vulkan runtime when a compute device is available; it still does not imply that the full decoder graph is Vulkan-executable.
 
 ## Source layout
 
