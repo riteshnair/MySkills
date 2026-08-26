@@ -806,6 +806,43 @@ lm_status lm_model_tensor_binding_dot_q8_0_vulkan(const lm_model_tensor_binding 
     return lm_vulkan_dot_q8_0(spv_path, device_index, packed_scratch, blocks, input, out);
 }
 
+lm_status lm_model_tensor_matvec_native(const lm_model_file *model, uint64_t tensor_index,
+                                        const lm_native_matvec_config *config,
+                                        void *packed_scratch, uint64_t scratch_bytes,
+                                        uint32_t rows, uint32_t columns,
+                                        const float *input, float *out) {
+    if (!model || !config || !packed_scratch || !input || !out) return LM_ERR_ARGUMENT;
+    lm_model_tensor_binding binding{};
+    const lm_status bound = lm_model_tensor_bind_native(model, tensor_index, &binding);
+    if (bound != LM_OK) return bound;
+    lm_backend_kind backend = config->backend;
+    if (backend == LM_BACKEND_AUTO) {
+        uint32_t device_count = 0u;
+        backend = (lm_vulkan_device_count(&device_count) == LM_OK && device_count != 0u)
+                      ? LM_BACKEND_VULKAN : LM_BACKEND_CPU;
+    }
+    if (backend != LM_BACKEND_CPU && backend != LM_BACKEND_VULKAN) return LM_ERR_UNSUPPORTED;
+    if (binding.quant_format == LM_QUANT_GGML_Q4_K) {
+        if (backend == LM_BACKEND_CPU)
+            return lm_model_tensor_binding_matvec_q4_k_cpu(&binding, packed_scratch, scratch_bytes,
+                                                           rows, columns, input, out);
+        if (!config->shader_path) return LM_ERR_ARGUMENT;
+        return lm_model_tensor_binding_matvec_q4_k_vulkan(&binding, packed_scratch, scratch_bytes,
+                                                          rows, columns, config->shader_path,
+                                                          config->device_index, input, out);
+    }
+    if (binding.quant_format == LM_QUANT_GGML_Q8_0) {
+        if (backend == LM_BACKEND_CPU)
+            return lm_model_tensor_binding_matvec_q8_0_cpu(&binding, packed_scratch, scratch_bytes,
+                                                           rows, columns, input, out);
+        if (!config->shader_path) return LM_ERR_ARGUMENT;
+        return lm_model_tensor_binding_matvec_q8_0_vulkan(&binding, packed_scratch, scratch_bytes,
+                                                          rows, columns, config->shader_path,
+                                                          config->device_index, input, out);
+    }
+    return LM_ERR_UNSUPPORTED;
+}
+
 lm_status lm_model_build_llama_graph(const lm_model_file *model,
                                      lm_decoder_graph_binding *out_binding) {
     if (!model || !out_binding || model->tensors.empty()) return LM_ERR_ARGUMENT;

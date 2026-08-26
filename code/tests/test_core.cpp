@@ -183,12 +183,24 @@ static void test_native_model_tensor_binding() {
         put_u32(bytes, type);
         put_u64(bytes, offset);
     };
+    auto put_matrix_descriptor = [&put_u32, &put_u64](std::vector<unsigned char> *bytes, const char *name,
+                                                       uint32_t type, uint64_t offset,
+                                                       uint64_t first_dimension, uint64_t second_dimension) {
+        const size_t length = std::strlen(name);
+        put_u64(bytes, length);
+        bytes->insert(bytes->end(), name, name + length);
+        put_u32(bytes, 2u);
+        put_u64(bytes, first_dimension);
+        put_u64(bytes, second_dimension);
+        put_u32(bytes, type);
+        put_u64(bytes, offset);
+    };
     std::vector<unsigned char> gguf(24u, 0u);
     gguf[0] = 'G'; gguf[1] = 'G'; gguf[2] = 'U'; gguf[3] = 'F';
     gguf[4] = 3u;
     gguf[8] = 3u;
     put_descriptor(&gguf, "q4", 2u, 0u, 32u);
-    put_descriptor(&gguf, "q8", 8u, 32u, 32u);
+    put_matrix_descriptor(&gguf, "q8", 8u, 32u, 1u, 32u);
     put_descriptor(&gguf, "q4_k", 12u, 96u, 256u);
     const size_t header_size = (gguf.size() + 31u) & ~static_cast<size_t>(31u);
     gguf.resize(header_size + 96u + 144u, 0u);
@@ -264,6 +276,12 @@ static void test_native_model_tensor_binding() {
                                                    sizeof(bound_q8_scratch), 1u, 32u,
                                                    bound_q8_input, q8_matrix_cpu) == LM_OK);
     assert(q8_matrix_cpu[0] == bound_q8_cpu);
+    lm_native_matvec_config native_cpu{LM_BACKEND_CPU, 0u, nullptr};
+    float native_cpu_output[1] = {};
+    assert(lm_model_tensor_matvec_native(model, 1u, &native_cpu, bound_q8_scratch,
+                                         sizeof(bound_q8_scratch), 1u, 32u,
+                                         bound_q8_input, native_cpu_output) == LM_OK);
+    assert(native_cpu_output[0] == q8_matrix_cpu[0]);
     if (q8_vulkan_devices != 0u) {
         float q8_matrix_vulkan[1] = {};
         assert(lm_model_tensor_binding_matvec_q8_0_vulkan(&q8_matrix_binding, bound_q8_scratch,
@@ -271,6 +289,12 @@ static void test_native_model_tensor_binding() {
                                                           "matvec_q8_0_f32.comp.spv", 0u,
                                                           bound_q8_input, q8_matrix_vulkan) == LM_OK);
         assert(q8_matrix_vulkan[0] == q8_matrix_cpu[0]);
+        lm_native_matvec_config native_vulkan{LM_BACKEND_VULKAN, 0u, "matvec_q8_0_f32.comp.spv"};
+        float native_vulkan_output[1] = {};
+        assert(lm_model_tensor_matvec_native(model, 1u, &native_vulkan, bound_q8_scratch,
+                                             sizeof(bound_q8_scratch), 1u, 32u,
+                                             bound_q8_input, native_vulkan_output) == LM_OK);
+        assert(native_vulkan_output[0] == q8_matrix_cpu[0]);
     }
     lm_model_tensor_binding q4_k_binding{};
     assert(lm_model_tensor_bind_native(model, 2u, &q4_k_binding) == LM_OK);

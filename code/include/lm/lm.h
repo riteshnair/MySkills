@@ -289,6 +289,12 @@ typedef struct lm_model_tensor_binding {
     uint32_t quant_bytes_per_block;
 } lm_model_tensor_binding;
 
+typedef struct lm_native_matvec_config {
+    lm_backend_kind backend;
+    uint32_t device_index;
+    const char *shader_path; /* required for Vulkan; ignored by CPU */
+} lm_native_matvec_config;
+
 lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity);
 void lm_model_close(lm_model_file *model);
 lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info);
@@ -322,6 +328,11 @@ lm_status lm_model_tensor_binding_dot_q8_0_vulkan(const lm_model_tensor_binding 
                                                   void *packed_scratch, uint64_t scratch_bytes,
                                                   const char *spv_path, uint32_t device_index,
                                                   const float *input, uint64_t elements, float *out);
+lm_status lm_model_tensor_matvec_native(const lm_model_file *model, uint64_t tensor_index,
+                                        const lm_native_matvec_config *config,
+                                        void *packed_scratch, uint64_t scratch_bytes,
+                                        uint32_t rows, uint32_t columns,
+                                        const float *input, float *out);
 
 
 void lm_config_init(lm_config *config);
