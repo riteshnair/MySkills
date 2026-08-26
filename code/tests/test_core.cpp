@@ -132,6 +132,17 @@ static void test_model_and_cpu_math() {
     char error[128] = {};
     assert(lm_model_inspect(gguf, &info, error, sizeof(error)) == LM_OK);
     assert(info.format == LM_MODEL_GGUF && info.version == 3u && info.tensor_count == 1u);
+    lm_model_file *model = nullptr;
+    assert(lm_model_open(gguf, &model, error, sizeof(error)) == LM_OK);
+    lm_model_info opened_info{};
+    assert(lm_model_get_info(model, &opened_info) == LM_OK && opened_info.header_bytes == info.header_bytes);
+    lm_file_span tensor_span{};
+    assert(lm_model_tensor_span(model, 0u, 4u, &tensor_span) == LM_OK);
+    unsigned char tensor_bytes[4] = {1u, 1u, 1u, 1u};
+    assert(lm_file_span_read(&tensor_span, 0u, tensor_bytes, sizeof(tensor_bytes)) == LM_OK);
+    assert(tensor_bytes[0] == 0u && tensor_bytes[1] == 0u && tensor_bytes[2] == 0u && tensor_bytes[3] == 0u);
+    assert(lm_model_tensor_span(model, info.file_bytes - info.header_bytes + 1u, 1u, &tensor_span) == LM_ERR_RANGE);
+    lm_model_close(model);
     std::remove(gguf);
 
     const float a[] = {1.0f, 2.0f, 3.0f};

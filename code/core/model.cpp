@@ -6,8 +6,14 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <new>
 #include <string>
 #include <vector>
+
+struct lm_model_file {
+    lm_file *file;
+    lm_model_info info;
+};
 
 namespace {
 
@@ -413,6 +419,45 @@ lm_status lm_model_inspect(const char *path, lm_model_info *out_info,
         if (std::memcmp(magic, "GGUF", 4u) == 0) return inspect_gguf(path, out_info, error_text, error_capacity);
     }
     return inspect_safetensors(path, out_info, error_text, error_capacity);
+}
+
+lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity) {
+    if (!path || !out_model) return LM_ERR_ARGUMENT;
+    *out_model = nullptr;
+    lm_model_info info{};
+    const lm_status inspected = lm_model_inspect(path, &info, error_text, error_capacity);
+    if (inspected != LM_OK) return inspected;
+    lm_file *file = nullptr;
+    const lm_status opened = lm_file_open(path, &file);
+    if (opened != LM_OK) return opened;
+    try {
+        lm_model_file *model = new lm_model_file{file, info};
+        *out_model = model;
+        return LM_OK;
+    } catch (const std::bad_alloc &) {
+        lm_file_close(file);
+        return LM_ERR_CAPACITY;
+    }
+}
+
+void lm_model_close(lm_model_file *model) {
+    if (!model) return;
+    lm_file_close(model->file);
+    delete model;
+}
+
+lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info) {
+    if (!model || !out_info) return LM_ERR_ARGUMENT;
+    *out_info = model->info;
+    return LM_OK;
+}
+
+lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_offset, uint64_t bytes, lm_file_span *out_span) {
+    if (!model || !out_span) return LM_ERR_ARGUMENT;
+    if (relative_offset > model->info.file_bytes - model->info.header_bytes ||
+        bytes > model->info.file_bytes - model->info.header_bytes - relative_offset)
+        return LM_ERR_RANGE;
+    return lm_file_span_make(model->file, model->info.header_bytes + relative_offset, bytes, out_span);
 }
 
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out) {

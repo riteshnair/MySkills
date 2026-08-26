@@ -84,6 +84,7 @@ typedef struct lm_config {
 typedef struct lm_runtime lm_runtime;
 typedef struct lm_buffer lm_buffer;
 typedef struct lm_file lm_file;
+typedef struct lm_model_file lm_model_file;
 
 lm_status lm_file_open(const char *path, lm_file **out_file);
 void lm_file_close(lm_file *file);
@@ -98,6 +99,7 @@ typedef struct lm_file_span {
 
 lm_status lm_file_span_make(lm_file *file, uint64_t offset, uint64_t bytes, lm_file_span *out_span);
 lm_status lm_file_span_read(const lm_file_span *span, uint64_t offset, void *dst, size_t bytes);
+
 
 typedef enum lm_dtype {
     LM_DTYPE_F32 = 0,
@@ -209,6 +211,11 @@ typedef struct lm_model_info {
     uint64_t header_bytes;
     uint64_t tensor_count;
 } lm_model_info;
+
+lm_status lm_model_open(const char *path, lm_model_file **out_model, char *error_text, size_t error_capacity);
+void lm_model_close(lm_model_file *model);
+lm_status lm_model_get_info(const lm_model_file *model, lm_model_info *out_info);
+lm_status lm_model_tensor_span(const lm_model_file *model, uint64_t relative_offset, uint64_t bytes, lm_file_span *out_span);
 
 
 void lm_config_init(lm_config *config);
