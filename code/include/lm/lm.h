@@ -82,6 +82,83 @@ typedef struct lm_config {
 } lm_config;
 
 typedef struct lm_runtime lm_runtime;
+typedef struct lm_buffer lm_buffer;
+
+typedef enum lm_dtype {
+    LM_DTYPE_F32 = 0,
+    LM_DTYPE_F16,
+    LM_DTYPE_BF16,
+    LM_DTYPE_I8,
+    LM_DTYPE_U8
+} lm_dtype;
+
+typedef struct lm_tensor {
+    void *data;
+    uint64_t bytes;
+    uint32_t rank;
+    uint32_t dims[8];
+    uint32_t strides[8];
+    lm_dtype dtype;
+} lm_tensor;
+
+size_t lm_dtype_size(lm_dtype dtype);
+lm_status lm_tensor_validate(const lm_tensor *tensor);
+lm_status lm_tensor_make_view(void *data, uint64_t bytes, lm_dtype dtype,
+                              uint32_t rank, const uint32_t *dims,
+                              lm_tensor *out_tensor);
+lm_status lm_buffer_alloc(uint64_t bytes, lm_buffer **out_buffer);
+void lm_buffer_free(lm_buffer *buffer);
+lm_status lm_buffer_view(lm_buffer *buffer, lm_tensor *out_tensor);
+
+
+typedef enum lm_kernel_op {
+    LM_KERNEL_DOT_F32 = 0,
+    LM_KERNEL_DOT_I8,
+    LM_KERNEL_SOFTMAX_F32
+} lm_kernel_op;
+
+typedef enum lm_kernel_path {
+    LM_KERNEL_AUTO = 0,
+    LM_KERNEL_CPU_SCALAR,
+    LM_KERNEL_VULKAN_SCALAR,
+    LM_KERNEL_VULKAN_DP4
+} lm_kernel_path;
+
+typedef struct lm_kernel_caps {
+    uint8_t vulkan;
+    uint8_t shader_int_dot;
+    uint8_t subgroup;
+} lm_kernel_caps;
+
+typedef struct lm_kernel_choice {
+    lm_kernel_op op;
+    lm_kernel_path path;
+    const char *name;
+    const char *source_id;
+} lm_kernel_choice;
+
+lm_status lm_kernel_select(lm_kernel_op op, lm_kernel_path requested,
+                           const lm_kernel_caps *caps, lm_kernel_choice *out_choice);
+const char *lm_kernel_path_name(lm_kernel_path path);
+
+typedef struct lm_vulkan_device_info {
+    char name[128];
+    uint32_t api_version;
+    uint32_t driver_version;
+    uint32_t vendor_id;
+    uint32_t device_id;
+    uint8_t is_cpu;
+    uint8_t shader_int_dot;
+    uint8_t subgroup;
+} lm_vulkan_device_info;
+
+lm_status lm_vulkan_device_count(uint32_t *out_count);
+lm_status lm_vulkan_device_info_get(uint32_t index, lm_vulkan_device_info *out_info);
+lm_status lm_vulkan_dot_i8_dp4(const char *spv_path, uint32_t device_index,
+                               const uint32_t *a, const uint32_t *b,
+                               uint32_t packed_words, int32_t *out_result);
+
+
 typedef struct lm_kv_cache lm_kv_cache;
 
 typedef struct lm_kv_stats {

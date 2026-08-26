@@ -29,11 +29,29 @@ int main(int argc, char **argv) {
                      lm_status_name(parsed), bad ? bad : "unknown");
         return 2;
     }
+    bool list_devices = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0) {
             print_help();
             return 0;
         }
+        if (std::strcmp(argv[i], "--list-devices") == 0) list_devices = true;
+    }
+    if (list_devices) {
+        uint32_t count = 0u;
+        const lm_status status = lm_vulkan_device_count(&count);
+        if (status != LM_OK) {
+            std::fprintf(stderr, "device discovery failed: %s\n", lm_status_name(status));
+            return 4;
+        }
+        for (uint32_t i = 0u; i < count; ++i) {
+            lm_vulkan_device_info info{};
+            if (lm_vulkan_device_info_get(i, &info) != LM_OK) return 4;
+            std::printf("device=%u name=%s api=%u vendor=0x%08x shader_int_dot=%u subgroup=%u cpu=%u\n",
+                        i, info.name, info.api_version, info.vendor_id,
+                        info.shader_int_dot, info.subgroup, info.is_cpu);
+        }
+        if (config.backend == LM_BACKEND_AUTO && !config.model_path[0]) return 0;
     }
 
     lm_runtime *runtime = nullptr;

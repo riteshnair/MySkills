@@ -57,6 +57,23 @@ static void test_invalid_backend() {
     assert(runtime == nullptr);
 }
 
+static void test_tensor_and_buffer() {
+    float values[6] = {};
+    const uint32_t dims[2] = {2u, 3u};
+    lm_tensor tensor{};
+    assert(lm_tensor_make_view(values, sizeof(values), LM_DTYPE_F32, 2u, dims, &tensor) == LM_OK);
+    assert(tensor.strides[0] == 3u && tensor.strides[1] == 1u);
+    lm_tensor bad = tensor;
+    bad.bytes = 4u;
+    assert(lm_tensor_validate(&bad) == LM_ERR_CAPACITY);
+    lm_buffer *buffer = nullptr;
+    assert(lm_buffer_alloc(64u, &buffer) == LM_OK);
+    lm_tensor buffer_view{};
+    assert(lm_buffer_view(buffer, &buffer_view) == LM_OK);
+    assert(buffer_view.bytes == 64u && buffer_view.dtype == LM_DTYPE_U8);
+    lm_buffer_free(buffer);
+}
+
 static void test_model_and_cpu_math() {
     const char *gguf = "test-fixture.gguf";
     {
@@ -105,6 +122,32 @@ static void test_kv_pages() {
     lm_kv_cache_destroy(cache);
 }
 
+static void test_kernel_selection() {
+    lm_kernel_caps cpu{0u, 0u, 0u};
+    lm_kernel_choice choice{};
+    assert(lm_kernel_select(LM_KERNEL_DOT_I8, LM_KERNEL_AUTO, &cpu, &choice) == LM_OK);
+    assert(choice.path == LM_KERNEL_CPU_SCALAR);
+
+    lm_kernel_caps dp4{1u, 1u, 1u};
+    assert(lm_kernel_select(LM_KERNEL_DOT_I8, LM_KERNEL_AUTO, &dp4, &choice) == LM_OK);
+    assert(choice.path == LM_KERNEL_VULKAN_DP4);
+    assert(std::strcmp(choice.source_id, "vulkan/dp4") == 0);
+    assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_DP4, &dp4, &choice) == LM_ERR_UNSUPPORTED);
+    assert(lm_kernel_select(LM_KERNEL_DOT_F32, LM_KERNEL_VULKAN_SCALAR, &dp4, &choice) == LM_OK);
+    assert(choice.path == LM_KERNEL_VULKAN_SCALAR);
+}
+
+static void test_vulkan_dp4() {
+    uint32_t device_count = 0u;
+    const lm_status discovered = lm_vulkan_device_count(&device_count);
+    if (discovered != LM_OK || device_count == 0u) return;
+    const uint32_t a[] = {0x04030201u};
+    const uint32_t b[] = {0x08070605u};
+    int32_t gpu_result = 0;
+    assert(lm_vulkan_dot_i8_dp4("dot_i8_dp4.comp.spv", 0u, a, b, 1u, &gpu_result) == LM_OK);
+    assert(gpu_result == 70);
+}
+
 static void test_probe_and_runtime() {
     lm_config config;
     lm_config_init(&config);
@@ -126,8 +169,11 @@ int main() {
     test_defaults();
     test_cli();
     test_invalid_backend();
+    test_tensor_and_buffer();
     test_model_and_cpu_math();
     test_kv_pages();
+    test_kernel_selection();
+    test_vulkan_dp4();
     test_probe_and_runtime();
     std::puts("core_tests=PASS");
     return 0;
