@@ -49,6 +49,13 @@ static lm_status parse_load(const char *text, lm_load_mode *out) {
     return LM_OK;
 }
 
+static lm_status parse_weight_policy(const char *text, lm_weight_policy *out) {
+    if (text_eq(text, "preserve")) *out = LM_WEIGHT_PRESERVE;
+    else if (text_eq(text, "quantize-cache")) *out = LM_WEIGHT_QUANTIZE_CACHE;
+    else return LM_ERR_PARSE;
+    return LM_OK;
+}
+
 static lm_status parse_kv(const char *text, lm_kv_dtype *out) {
     if (text_eq(text, "f16")) *out = LM_KV_F16;
     else if (text_eq(text, "bf16")) *out = LM_KV_BF16;
@@ -65,6 +72,7 @@ void lm_config_init(lm_config *config) {
     config->backend = LM_BACKEND_AUTO;
     config->resolved_backend = LM_BACKEND_AUTO;
     config->load_mode = LM_LOAD_MMAP;
+    config->weight_policy = LM_WEIGHT_PRESERVE;
     config->kv_dtype = LM_KV_F16;
     config->context_tokens = 4096u;
     config->threads = 1u;
@@ -92,6 +100,9 @@ lm_status lm_config_parse_argv(lm_config *config, int argc, char **argv, const c
         } else if (text_eq(arg, "--load")) {
             if (++i >= argc) status = LM_ERR_ARGUMENT;
             else status = parse_load(argv[i], &config->load_mode);
+        } else if (text_eq(arg, "--weights")) {
+            if (++i >= argc) status = LM_ERR_ARGUMENT;
+            else status = parse_weight_policy(argv[i], &config->weight_policy);
         } else if (text_eq(arg, "--kv-dtype")) {
             if (++i >= argc) status = LM_ERR_ARGUMENT;
             else status = parse_kv(argv[i], &config->kv_dtype);
@@ -180,6 +191,14 @@ const char *lm_load_mode_name(lm_load_mode mode) {
     }
 }
 
+const char *lm_weight_policy_name(lm_weight_policy policy) {
+    switch (policy) {
+        case LM_WEIGHT_PRESERVE: return "preserve";
+        case LM_WEIGHT_QUANTIZE_CACHE: return "quantize-cache";
+        default: return "unknown";
+    }
+}
+
 const char *lm_kv_dtype_name(lm_kv_dtype dtype) {
     switch (dtype) {
         case LM_KV_F16: return "f16";
@@ -199,6 +218,10 @@ lm_status lm_runtime_create(const lm_config *config, lm_runtime **out_runtime) {
     runtime->config = *config;
     runtime->config.resolved_backend = config->backend == LM_BACKEND_AUTO ? LM_BACKEND_CPU : config->backend;
     runtime->next_trace_id = 1u;
+    if (config->weight_policy == LM_WEIGHT_QUANTIZE_CACHE) {
+        std::free(runtime);
+        return LM_ERR_UNSUPPORTED;
+    }
     if (runtime->config.resolved_backend == LM_BACKEND_VULKAN) {
         uint32_t device_count = 0u;
         const lm_status discovered = lm_vulkan_device_count(&device_count);
@@ -237,6 +260,7 @@ lm_status lm_runtime_dump_config(const lm_runtime *runtime, FILE *out) {
     fprintf(out, "context=%u\n", c.context_tokens);
     fprintf(out, "threads=%u\n", c.threads);
     fprintf(out, "load=%s\n", lm_load_mode_name(c.load_mode));
+    fprintf(out, "weight_policy=%s\n", lm_weight_policy_name(c.weight_policy));
     fprintf(out, "kv_dtype=%s\n", lm_kv_dtype_name(c.kv_dtype));
     fprintf(out, "kv_page_tokens=%u\n", c.kv_page_tokens);
     fprintf(out, "prefetch=%s\n", c.prefetch ? "on" : "off");

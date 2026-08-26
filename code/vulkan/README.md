@@ -10,8 +10,9 @@ The backend is intentionally narrow and replaceable. The portable core selects a
 | Compute-queue discovery | Implemented |
 | Host-visible storage-buffer setup | Implemented for the reference dispatch |
 | Packed int8 DP4 shader | Implemented in `shaders/dot_i8_dp4.comp` |
+| Scalar F32 dot shader | Implemented in `shaders/dot_f32_scalar.comp` |
 | SPIR-V build target | Implemented when `glslangValidator` is available |
-| CPU/Vulkan differential fixture | Implemented |
+| CPU/Vulkan differential fixture | Implemented for scalar F32 dot and packed-int8 DP4 |
 | Cooperative matrices | Explicitly excluded |
 | Full tensor graph dispatch | Not yet implemented |
 
@@ -39,4 +40,4 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The generated `dot_i8_dp4.comp.spv` remains in `build/` and is ignored by Git. It is loaded by the differential test from the test working directory.
+The generated `dot_i8_dp4.comp.spv` and `dot_f32_scalar.comp.spv` remain in `build/` and are ignored by Git. They are loaded by the differential tests from the test working directory.

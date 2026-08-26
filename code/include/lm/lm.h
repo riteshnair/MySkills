@@ -41,6 +41,11 @@ typedef enum lm_load_mode {
     LM_LOAD_STREAM
 } lm_load_mode;
 
+typedef enum lm_weight_policy {
+    LM_WEIGHT_PRESERVE = 0,
+    LM_WEIGHT_QUANTIZE_CACHE
+} lm_weight_policy;
+
 typedef enum lm_kv_dtype {
     LM_KV_F16 = 0,
     LM_KV_BF16,
@@ -66,6 +71,7 @@ typedef struct lm_config {
     lm_backend_kind backend;
     lm_backend_kind resolved_backend;
     lm_load_mode load_mode;
+    lm_weight_policy weight_policy;
     lm_kv_dtype kv_dtype;
     uint32_t device_index;
     uint32_t context_tokens;
@@ -110,6 +116,11 @@ typedef enum lm_dtype {
     LM_DTYPE_U8
 } lm_dtype;
 
+typedef enum lm_quant_format {
+    LM_QUANT_NONE = 0,
+    LM_QUANT_BLOCK_STORAGE
+} lm_quant_format;
+
 typedef struct lm_tensor {
     void *data;
     uint64_t bytes;
@@ -117,13 +128,22 @@ typedef struct lm_tensor {
     uint32_t dims[8];
     uint32_t strides[8];
     lm_dtype dtype;
+    lm_quant_format quant_format;
+    uint32_t quant_elements_per_block;
+    uint32_t quant_bytes_per_block;
 } lm_tensor;
 
 size_t lm_dtype_size(lm_dtype dtype);
+const char *lm_quant_format_name(lm_quant_format format);
 lm_status lm_tensor_validate(const lm_tensor *tensor);
 lm_status lm_tensor_make_view(void *data, uint64_t bytes, lm_dtype dtype,
                               uint32_t rank, const uint32_t *dims,
                               lm_tensor *out_tensor);
+lm_status lm_tensor_make_quant_view(void *data, uint64_t bytes,
+                                    uint32_t rank, const uint32_t *dims,
+                                    uint32_t elements_per_block,
+                                    uint32_t bytes_per_block,
+                                    lm_tensor *out_tensor);
 lm_status lm_buffer_alloc(uint64_t bytes, lm_buffer **out_buffer);
 void lm_buffer_free(lm_buffer *buffer);
 lm_status lm_buffer_view(lm_buffer *buffer, lm_tensor *out_tensor);
@@ -184,6 +204,9 @@ lm_status lm_vulkan_device_info_get(uint32_t index, lm_vulkan_device_info *out_i
 lm_status lm_vulkan_dot_i8_dp4(const char *spv_path, uint32_t device_index,
                                const uint32_t *a, const uint32_t *b,
                                uint32_t packed_words, int32_t *out_result);
+lm_status lm_vulkan_dot_f32(const char *spv_path, uint32_t device_index,
+                            const float *a, const float *b,
+                            uint32_t count, float *out_result);
 
 
 typedef struct lm_kv_cache lm_kv_cache;
@@ -224,6 +247,7 @@ lm_status lm_config_parse_argv(lm_config *config, int argc, char **argv,
 const char *lm_status_name(lm_status status);
 const char *lm_backend_name(lm_backend_kind backend);
 const char *lm_load_mode_name(lm_load_mode mode);
+const char *lm_weight_policy_name(lm_weight_policy policy);
 const char *lm_kv_dtype_name(lm_kv_dtype dtype);
 const char *lm_model_format_name(lm_model_format format);
 lm_status lm_model_inspect(const char *path, lm_model_info *out_info,

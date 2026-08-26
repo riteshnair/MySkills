@@ -27,22 +27,33 @@ static void test_cli() {
     char a0[] = "tiny-lm";
     char a1[] = "--backend"; char a2[] = "cpu";
     char a3[] = "--load"; char a4[] = "lazy";
-    char a5[] = "--kv-dtype"; char a6[] = "q8";
-    char a7[] = "--context"; char a8[] = "2048";
-    char a9[] = "--threads"; char a10[] = "4";
-    char a11[] = "--trace"; char a12[] = "--model"; char a13[] = "model.gguf";
-    char *argv[] = {a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13};
+    char a5[] = "--weights"; char a6[] = "preserve";
+    char a7[] = "--kv-dtype"; char a8[] = "q8";
+    char a9[] = "--context"; char a10[] = "2048";
+    char a11[] = "--threads"; char a12[] = "4";
+    char a13[] = "--trace"; char a14[] = "--model"; char a15[] = "model.gguf";
+    char *argv[] = {a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15};
     lm_config config;
     lm_config_init(&config);
     const char *bad = nullptr;
-    assert(lm_config_parse_argv(&config, 14, argv, &bad) == LM_OK);
+    assert(lm_config_parse_argv(&config, 16, argv, &bad) == LM_OK);
     assert(config.backend == LM_BACKEND_CPU);
     assert(config.load_mode == LM_LOAD_LAZY);
+    assert(config.weight_policy == LM_WEIGHT_PRESERVE);
     assert(config.kv_dtype == LM_KV_Q8);
     assert(config.context_tokens == 2048u);
     assert(config.threads == 4u);
     assert(config.trace == 1u);
     assert(std::strcmp(config.model_path, "model.gguf") == 0);
+}
+
+static void test_quantize_policy_gate() {
+    lm_config config;
+    lm_config_init(&config);
+    config.weight_policy = LM_WEIGHT_QUANTIZE_CACHE;
+    lm_runtime *runtime = nullptr;
+    assert(lm_runtime_create(&config, &runtime) == LM_ERR_UNSUPPORTED);
+    assert(runtime == nullptr);
 }
 
 static void test_vulkan_backend_resolution() {
@@ -78,6 +89,12 @@ static void test_tensor_and_buffer() {
     lm_tensor buffer_view{};
     assert(lm_buffer_view(buffer, &buffer_view) == LM_OK);
     assert(buffer_view.bytes == 64u && buffer_view.dtype == LM_DTYPE_U8);
+    unsigned char quantized_bytes[20] = {};
+    const uint32_t quant_dims[1] = {32u};
+    lm_tensor quantized{};
+    assert(lm_tensor_make_quant_view(quantized_bytes, sizeof(quantized_bytes), 1u, quant_dims, 32u, 20u, &quantized) == LM_OK);
+    assert(quantized.quant_format == LM_QUANT_BLOCK_STORAGE && quantized.dtype == LM_DTYPE_U8);
+    assert(lm_tensor_make_quant_view(quantized_bytes, 19u, 1u, quant_dims, 32u, 20u, &quantized) == LM_ERR_CAPACITY);
     lm_buffer_free(buffer);
 }
 
@@ -274,6 +291,11 @@ static void test_vulkan_dp4() {
     int32_t gpu_result = 0;
     assert(lm_vulkan_dot_i8_dp4("dot_i8_dp4.comp.spv", 0u, a, b, 1u, &gpu_result) == LM_OK);
     assert(gpu_result == 70);
+    const float scalar_a[] = {1.0f, 2.0f, 3.0f, 4.0f};
+    const float scalar_b[] = {5.0f, 6.0f, 7.0f, 8.0f};
+    float scalar_result = 0.0f;
+    assert(lm_vulkan_dot_f32("dot_f32_scalar.comp.spv", 0u, scalar_a, scalar_b, 4u, &scalar_result) == LM_OK);
+    assert(scalar_result == 70.0f);
 }
 
 static void test_probe_and_runtime() {
@@ -296,6 +318,7 @@ static void test_probe_and_runtime() {
 int main() {
     test_defaults();
     test_cli();
+    test_quantize_policy_gate();
     test_vulkan_backend_resolution();
     test_tensor_and_buffer();
     test_file_access();

@@ -17,3 +17,11 @@ Source: [SafeTensors documentation](https://huggingface.co/docs/safetensors/en/i
 ## Implementation boundary
 
 The current engine only has structural SafeTensors checks and GGUF count checks. The next parser slice must use bounded reads, reject overflow, reject duplicate or overlapping tensor ranges, cap metadata nesting/counts, and avoid adding a general-purpose JSON dependency to the mandatory core.
+
+## MoE routing
+
+The current GGUF specification includes architecture metadata for expert models, including `*.expert_count` and `*.expert_used_count` fields; exact keys are architecture-scoped and must be read from the model’s declared architecture rather than guessed from filenames. The tensor mapping used by llama.cpp includes expert-specific feed-forward tensors such as `feed_forward.experts.w3`, so tensor-name mapping must treat expert index and layer index as structural fields.
+
+The Mixtral configuration reference identifies `num_local_experts` as the number of expert MLPs available on a device and `num_experts_per_tok` as the token-choice top-k routing value. A correct runtime must preserve all expert weights in their native encoded layout, compute router logits, select the configured top-k experts, normalize or apply the model-specified routing weights, evaluate only selected experts, and combine their outputs. Loading all experts into F32 would be an invalid default for the memory design.
+
+Sources: [GGUF specification](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md), [Mixtral configuration and architecture reference](https://huggingface.co/docs/transformers/en/model_doc/mixtral), and [llama.cpp tensor-name mapping](https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/tensor_mapping.py).
