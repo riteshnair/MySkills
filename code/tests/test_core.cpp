@@ -255,6 +255,23 @@ static void test_native_model_tensor_binding() {
     assert(lm_model_tensor_binding_dot_q8_0_cpu(&q8_binding, bound_q8_scratch,
                                                 sizeof(bound_q8_scratch) - 1u,
                                                 bound_q8_input, 32u, &bound_q8_cpu) == LM_ERR_CAPACITY);
+    lm_model_tensor_binding q8_matrix_binding = q8_binding;
+    q8_matrix_binding.descriptor.rank = 2u;
+    q8_matrix_binding.descriptor.dims[0] = 1u;
+    q8_matrix_binding.descriptor.dims[1] = 32u;
+    float q8_matrix_cpu[1] = {};
+    assert(lm_model_tensor_binding_matvec_q8_0_cpu(&q8_matrix_binding, bound_q8_scratch,
+                                                   sizeof(bound_q8_scratch), 1u, 32u,
+                                                   bound_q8_input, q8_matrix_cpu) == LM_OK);
+    assert(q8_matrix_cpu[0] == bound_q8_cpu);
+    if (q8_vulkan_devices != 0u) {
+        float q8_matrix_vulkan[1] = {};
+        assert(lm_model_tensor_binding_matvec_q8_0_vulkan(&q8_matrix_binding, bound_q8_scratch,
+                                                          sizeof(bound_q8_scratch), 1u, 32u,
+                                                          "matvec_q8_0_f32.comp.spv", 0u,
+                                                          bound_q8_input, q8_matrix_vulkan) == LM_OK);
+        assert(q8_matrix_vulkan[0] == q8_matrix_cpu[0]);
+    }
     lm_model_tensor_binding q4_k_binding{};
     assert(lm_model_tensor_bind_native(model, 2u, &q4_k_binding) == LM_OK);
     assert(q4_k_binding.elements == 256u && q4_k_binding.span.bytes == 144u &&
@@ -705,6 +722,21 @@ static void test_vulkan_dp4() {
     assert(lm_vulkan_dot_q8_0("dot_q8_0_f32.comp.spv", 0u, q8_0_bytes, 1u,
                               q8_0_input, &q8_0_gpu_result) == LM_OK);
     assert(q8_0_gpu_result == 32.0f);
+    unsigned char q8_0_rows[68] = {};
+    q8_0_rows[1] = 0x3cu;
+    for (unsigned i = 0u; i < 32u; ++i) q8_0_rows[2u + i] = 1u;
+    q8_0_rows[35u] = 0x3cu;
+    for (unsigned i = 0u; i < 32u; ++i) q8_0_rows[36u + i] = 2u;
+    lm_tensor q8_0_matrix{};
+    const uint32_t q8_0_dims[2] = {2u, 32u};
+    assert(lm_tensor_make_q8_0_view(q8_0_rows, sizeof(q8_0_rows), 2u, q8_0_dims, &q8_0_matrix) == LM_OK);
+    float q8_0_cpu_rows[2] = {};
+    assert(lm_cpu_matvec_q8_0(&q8_0_matrix, q8_0_input, 2u, 32u, q8_0_cpu_rows) == LM_OK);
+    assert(q8_0_cpu_rows[0] == 32.0f && q8_0_cpu_rows[1] == 64.0f);
+    float q8_0_gpu_rows[2] = {};
+    assert(lm_vulkan_matvec_q8_0("matvec_q8_0_f32.comp.spv", 0u, q8_0_rows, 2u, 1u,
+                                 q8_0_input, q8_0_gpu_rows) == LM_OK);
+    assert(q8_0_gpu_rows[0] == q8_0_cpu_rows[0] && q8_0_gpu_rows[1] == q8_0_cpu_rows[1]);
     lm_kernel_choice q8_0_choice{};
     const lm_kernel_caps q8_0_caps{1u, 1u, 1u};
     assert(lm_kernel_select(LM_KERNEL_DOT_Q8_0, LM_KERNEL_VULKAN_SCALAR, &q8_0_caps, &q8_0_choice) == LM_OK);

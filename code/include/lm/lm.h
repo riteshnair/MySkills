@@ -240,6 +240,10 @@ lm_status lm_vulkan_matvec_q4_k(const char *spv_path, uint32_t device_index,
                                 const void *packed_q4_k, uint32_t rows,
                                 uint32_t blocks_per_row, const float *input,
                                 float *out);
+lm_status lm_vulkan_matvec_q8_0(const char *spv_path, uint32_t device_index,
+                                const void *packed_q8_0, uint32_t rows,
+                                uint32_t blocks_per_row, const float *input,
+                                float *out);
 typedef struct lm_kv_cache lm_kv_cache;
 
 typedef struct lm_kv_stats {
@@ -302,6 +306,15 @@ lm_status lm_model_tensor_binding_matvec_q4_k_vulkan(const lm_model_tensor_bindi
                                                      uint32_t rows, uint32_t columns,
                                                      const char *spv_path, uint32_t device_index,
                                                      const float *input, float *out);
+lm_status lm_model_tensor_binding_matvec_q8_0_cpu(const lm_model_tensor_binding *binding,
+                                                  void *packed_scratch, uint64_t scratch_bytes,
+                                                  uint32_t rows, uint32_t columns,
+                                                  const float *input, float *out);
+lm_status lm_model_tensor_binding_matvec_q8_0_vulkan(const lm_model_tensor_binding *binding,
+                                                     void *packed_scratch, uint64_t scratch_bytes,
+                                                     uint32_t rows, uint32_t columns,
+                                                     const char *spv_path, uint32_t device_index,
+                                                     const float *input, float *out);
 lm_status lm_model_tensor_binding_dot_q8_0_cpu(const lm_model_tensor_binding *binding,
                                                void *packed_scratch, uint64_t scratch_bytes,
                                                const float *input, uint64_t elements, float *out);
@@ -331,6 +344,8 @@ lm_status lm_cpu_dot_q8_0(const lm_tensor *weights, const float *input,
 lm_status lm_cpu_dot_q4_k(const lm_tensor *weights, const float *input,
                           uint64_t elements, float *out);
 lm_status lm_cpu_matvec_q4_k(const lm_tensor *weights, const float *input,
+                             uint32_t rows, uint32_t columns, float *out);
+lm_status lm_cpu_matvec_q8_0(const lm_tensor *weights, const float *input,
                              uint32_t rows, uint32_t columns, float *out);
 
 
