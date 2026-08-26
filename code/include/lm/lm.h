@@ -164,7 +164,8 @@ lm_status lm_buffer_view(lm_buffer *buffer, lm_tensor *out_tensor);
 typedef enum lm_kernel_op {
     LM_KERNEL_DOT_F32 = 0,
     LM_KERNEL_DOT_I8,
-    LM_KERNEL_SOFTMAX_F32
+    LM_KERNEL_SOFTMAX_F32,
+    LM_KERNEL_DOT_Q4_K
 } lm_kernel_op;
 
 typedef enum lm_kernel_path {
