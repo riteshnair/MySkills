@@ -1,7 +1,7 @@
 #include "lm/lm.h"
 
 static int valid_op(lm_kernel_op op) {
-    return op >= LM_KERNEL_DOT_F32 && op <= LM_KERNEL_DOT_Q4_K;
+    return op >= LM_KERNEL_DOT_F32 && op <= LM_KERNEL_DOT_Q8_0;
 }
 
 lm_status lm_kernel_contract_get(const lm_kernel_choice *choice, lm_kernel_contract *out_contract) {
@@ -11,7 +11,7 @@ lm_status lm_kernel_contract_get(const lm_kernel_choice *choice, lm_kernel_contr
     out_contract->minimum_alignment = 1u;
     out_contract->deterministic = 1u;
     out_contract->source_id = choice->source_id;
-    if (choice->op == LM_KERNEL_DOT_Q4_K) {
+    if (choice->op == LM_KERNEL_DOT_Q4_K || choice->op == LM_KERNEL_DOT_Q8_0) {
         out_contract->input_dtype = LM_DTYPE_U8;
         out_contract->output_dtype = LM_DTYPE_F32;
         out_contract->minimum_alignment = 1u;
@@ -50,10 +50,11 @@ lm_status lm_kernel_select(lm_kernel_op op, lm_kernel_path requested,
 
     const int dot_op = op == LM_KERNEL_DOT_I8;
     const int q4_k_op = op == LM_KERNEL_DOT_Q4_K;
+    const int q8_0_op = op == LM_KERNEL_DOT_Q8_0;
     if (requested == LM_KERNEL_CPU_SCALAR || requested == LM_KERNEL_AUTO) {
         if (requested == LM_KERNEL_CPU_SCALAR || !caps->vulkan) {
             out_choice->path = LM_KERNEL_CPU_SCALAR;
-            out_choice->name = dot_op ? "cpu-dot-i8" : (q4_k_op ? "cpu-dot-q4-k" : (op == LM_KERNEL_DOT_F32 ? "cpu-dot-f32" : "cpu-softmax-f32"));
+            out_choice->name = dot_op ? "cpu-dot-i8" : (q4_k_op ? "cpu-dot-q4-k" : (q8_0_op ? "cpu-dot-q8-0" : (op == LM_KERNEL_DOT_F32 ? "cpu-dot-f32" : "cpu-softmax-f32")));
             out_choice->source_id = "cpu/reference";
             return LM_OK;
         }
@@ -70,8 +71,8 @@ lm_status lm_kernel_select(lm_kernel_op op, lm_kernel_path requested,
     if (requested == LM_KERNEL_VULKAN_SCALAR || requested == LM_KERNEL_AUTO) {
         if (caps->vulkan) {
             out_choice->path = LM_KERNEL_VULKAN_SCALAR;
-            out_choice->name = op == LM_KERNEL_DOT_F32 ? "vulkan-dot-f32" : (op == LM_KERNEL_DOT_I8 ? "vulkan-dot-i8" : (q4_k_op ? "vulkan-dot-q4-k" : "vulkan-softmax-f32"));
-            out_choice->source_id = q4_k_op ? "vulkan/q4_k" : "vulkan/scalar";
+            out_choice->name = op == LM_KERNEL_DOT_F32 ? "vulkan-dot-f32" : (op == LM_KERNEL_DOT_I8 ? "vulkan-dot-i8" : (q4_k_op ? "vulkan-dot-q4-k" : (q8_0_op ? "vulkan-dot-q8-0" : "vulkan-softmax-f32")));
+            out_choice->source_id = q4_k_op ? "vulkan/q4_k" : (q8_0_op ? "vulkan/q8_0" : "vulkan/scalar");
             return LM_OK;
         }
         if (requested == LM_KERNEL_VULKAN_SCALAR) return LM_ERR_UNSUPPORTED;

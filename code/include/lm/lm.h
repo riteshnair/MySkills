@@ -165,7 +165,8 @@ typedef enum lm_kernel_op {
     LM_KERNEL_DOT_F32 = 0,
     LM_KERNEL_DOT_I8,
     LM_KERNEL_SOFTMAX_F32,
-    LM_KERNEL_DOT_Q4_K
+    LM_KERNEL_DOT_Q4_K,
+    LM_KERNEL_DOT_Q8_0
 } lm_kernel_op;
 
 typedef enum lm_kernel_path {
@@ -232,6 +233,9 @@ lm_status lm_vulkan_dot_f32(const char *spv_path, uint32_t device_index,
 lm_status lm_vulkan_dot_q4_k(const char *spv_path, uint32_t device_index,
                              const void *packed_q4_k, uint32_t blocks,
                              const float *input, float *out_result);
+lm_status lm_vulkan_dot_q8_0(const char *spv_path, uint32_t device_index,
+                              const void *packed_q8_0, uint32_t blocks,
+                              const float *input, float *out_result);
 lm_status lm_vulkan_matvec_q4_k(const char *spv_path, uint32_t device_index,
                                 const void *packed_q4_k, uint32_t rows,
                                 uint32_t blocks_per_row, const float *input,
@@ -298,6 +302,13 @@ lm_status lm_model_tensor_binding_matvec_q4_k_vulkan(const lm_model_tensor_bindi
                                                      uint32_t rows, uint32_t columns,
                                                      const char *spv_path, uint32_t device_index,
                                                      const float *input, float *out);
+lm_status lm_model_tensor_binding_dot_q8_0_cpu(const lm_model_tensor_binding *binding,
+                                               void *packed_scratch, uint64_t scratch_bytes,
+                                               const float *input, uint64_t elements, float *out);
+lm_status lm_model_tensor_binding_dot_q8_0_vulkan(const lm_model_tensor_binding *binding,
+                                                  void *packed_scratch, uint64_t scratch_bytes,
+                                                  const char *spv_path, uint32_t device_index,
+                                                  const float *input, uint64_t elements, float *out);
 
 
 void lm_config_init(lm_config *config);

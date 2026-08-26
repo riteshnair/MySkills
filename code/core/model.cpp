@@ -709,6 +709,51 @@ lm_status lm_model_tensor_binding_matvec_q4_k_vulkan(const lm_model_tensor_bindi
                                  blocks_per_row, input, out);
 }
 
+static lm_status validate_q8_0_binding_dot(const lm_model_tensor_binding *binding,
+                                             uint64_t elements, uint64_t *payload_bytes,
+                                             uint32_t *blocks) {
+    if (!binding || !payload_bytes || !blocks || elements == 0u || elements % 32u != 0u ||
+        binding->quant_format != LM_QUANT_GGML_Q8_0 || binding->elements != elements)
+        return LM_ERR_ARGUMENT;
+    const uint64_t block_count = elements / 32u;
+    const uint64_t expected = block_count * 34u;
+    if (block_count > UINT32_MAX || expected != binding->span.bytes) return LM_ERR_CAPACITY;
+    *payload_bytes = expected;
+    *blocks = static_cast<uint32_t>(block_count);
+    return LM_OK;
+}
+
+lm_status lm_model_tensor_binding_dot_q8_0_cpu(const lm_model_tensor_binding *binding,
+                                               void *packed_scratch, uint64_t scratch_bytes,
+                                               const float *input, uint64_t elements, float *out) {
+    if (!packed_scratch || !input || !out) return LM_ERR_ARGUMENT;
+    uint64_t payload_bytes = 0u;
+    uint32_t blocks = 0u;
+    const lm_status valid = validate_q8_0_binding_dot(binding, elements, &payload_bytes, &blocks);
+    if (valid != LM_OK) return valid;
+    if (scratch_bytes < payload_bytes) return LM_ERR_CAPACITY;
+    lm_tensor tensor{};
+    const lm_status read = lm_model_tensor_binding_read(binding, packed_scratch, payload_bytes, &tensor);
+    if (read != LM_OK) return read;
+    return lm_cpu_dot_q8_0(&tensor, input, elements, out);
+}
+
+lm_status lm_model_tensor_binding_dot_q8_0_vulkan(const lm_model_tensor_binding *binding,
+                                                  void *packed_scratch, uint64_t scratch_bytes,
+                                                  const char *spv_path, uint32_t device_index,
+                                                  const float *input, uint64_t elements, float *out) {
+    if (!packed_scratch || !input || !out || !spv_path) return LM_ERR_ARGUMENT;
+    uint64_t payload_bytes = 0u;
+    uint32_t blocks = 0u;
+    const lm_status valid = validate_q8_0_binding_dot(binding, elements, &payload_bytes, &blocks);
+    if (valid != LM_OK) return valid;
+    if (scratch_bytes < payload_bytes) return LM_ERR_CAPACITY;
+    const lm_status read = lm_file_span_read(&binding->span, 0u, packed_scratch,
+                                             static_cast<size_t>(payload_bytes));
+    if (read != LM_OK) return read;
+    return lm_vulkan_dot_q8_0(spv_path, device_index, packed_scratch, blocks, input, out);
+}
+
 lm_status lm_cpu_dot_f32(const float *a, const float *b, size_t count, float *out) {
     if (!a || !b || !out || count == 0u) return LM_ERR_ARGUMENT;
     float sum = 0.0f;

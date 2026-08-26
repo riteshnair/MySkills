@@ -234,6 +234,27 @@ static void test_native_model_tensor_binding() {
     lm_tensor q8_tensor{};
     assert(lm_model_tensor_binding_read(&q8_binding, q8_bytes, sizeof(q8_bytes), &q8_tensor) == LM_OK);
     assert(lm_cpu_dot_q8_0(&q8_tensor, input, 32u, &result) == LM_OK && result == 528.0f);
+    unsigned char bound_q8_scratch[34] = {};
+    float bound_q8_input[32] = {};
+    for (float &value : bound_q8_input) value = 1.0f;
+    float bound_q8_cpu = 0.0f;
+    assert(lm_model_tensor_binding_dot_q8_0_cpu(&q8_binding, bound_q8_scratch,
+                                                sizeof(bound_q8_scratch), bound_q8_input,
+                                                32u, &bound_q8_cpu) == LM_OK);
+    assert(bound_q8_cpu == 528.0f);
+    uint32_t q8_vulkan_devices = 0u;
+    if (lm_vulkan_device_count(&q8_vulkan_devices) == LM_OK && q8_vulkan_devices != 0u) {
+        float bound_q8_vulkan = 0.0f;
+        assert(lm_model_tensor_binding_dot_q8_0_vulkan(&q8_binding, bound_q8_scratch,
+                                                       sizeof(bound_q8_scratch),
+                                                       "dot_q8_0_f32.comp.spv", 0u,
+                                                       bound_q8_input, 32u,
+                                                       &bound_q8_vulkan) == LM_OK);
+        assert(bound_q8_vulkan == bound_q8_cpu);
+    }
+    assert(lm_model_tensor_binding_dot_q8_0_cpu(&q8_binding, bound_q8_scratch,
+                                                sizeof(bound_q8_scratch) - 1u,
+                                                bound_q8_input, 32u, &bound_q8_cpu) == LM_ERR_CAPACITY);
     lm_model_tensor_binding q4_k_binding{};
     assert(lm_model_tensor_bind_native(model, 2u, &q4_k_binding) == LM_OK);
     assert(q4_k_binding.elements == 256u && q4_k_binding.span.bytes == 144u &&
@@ -648,6 +669,23 @@ static void test_vulkan_dp4() {
     assert(lm_vulkan_dot_q4_k("dot_q4_k_f32.comp.spv", 0u, q4_k_bytes, 1u,
                               q4_k_input, &q4_k_gpu_result) == LM_OK);
     assert(q4_k_gpu_result == 256.0f);
+    unsigned char q8_0_bytes[34] = {};
+    q8_0_bytes[1] = 0x3cu;
+    for (unsigned i = 0u; i < 32u; ++i) q8_0_bytes[2u + i] = 1u;
+    float q8_0_input[32] = {};
+    for (float &value : q8_0_input) value = 1.0f;
+    float q8_0_gpu_result = 0.0f;
+    assert(lm_vulkan_dot_q8_0("dot_q8_0_f32.comp.spv", 0u, q8_0_bytes, 1u,
+                              q8_0_input, &q8_0_gpu_result) == LM_OK);
+    assert(q8_0_gpu_result == 32.0f);
+    lm_kernel_choice q8_0_choice{};
+    const lm_kernel_caps q8_0_caps{1u, 1u, 1u};
+    assert(lm_kernel_select(LM_KERNEL_DOT_Q8_0, LM_KERNEL_VULKAN_SCALAR, &q8_0_caps, &q8_0_choice) == LM_OK);
+    assert(std::strcmp(q8_0_choice.source_id, "vulkan/q8_0") == 0);
+    lm_kernel_io q8_0_io{q8_0_bytes, q8_0_input, 1u, &q8_0_gpu_result};
+    q8_0_gpu_result = 0.0f;
+    assert(lm_vulkan_dispatch(&q8_0_choice, "dot_q8_0_f32.comp.spv", 0u, &q8_0_io) == LM_OK);
+    assert(q8_0_gpu_result == 32.0f);
     unsigned char q4_k_rows[288] = {};
     std::memcpy(q4_k_rows, q4_k_bytes, sizeof(q4_k_bytes));
     q4_k_rows[144u] = 0x00u;
